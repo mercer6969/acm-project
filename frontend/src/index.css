@@ -1,0 +1,109 @@
+/* ── Reset ─────────────────────────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+/* ── Design tokens ──────────────────────────────────────────────────────────── */
+:root {
+  --bg:        #040a0f;
+  --bg2:       #071018;
+  --bg3:       #0b1825;
+  --grid:      #0d2035;
+  --green:     #00ff88;
+  --green-dim: #00994d;
+  --amber:     #ffaa00;
+  --red:       #ff3333;
+  --blue:      #00aaff;
+  --text:      #a8d8b0;
+  --text-dim:  #3a6a4a;
+  --border:    #0f3020;
+  --font-mono: 'Share Tech Mono', monospace;
+  --font-crt:  'VT323', monospace;
+  --panel-bg:  rgba(4, 14, 10, 0.92);
+}
+
+html, body, #root {
+  width: 100%; height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-mono);
+  overflow: hidden;
+}
+
+/* ── CRT scanlines overlay ──────────────────────────────────────────────────── */
+body::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background: repeating-linear-gradient(
+    0deg,
+    transparent,
+    transparent 2px,
+    rgba(0,0,0,0.08) 2px,
+    rgba(0,0,0,0.08) 4px
+  );
+  pointer-events: none;
+  z-index: 9999;
+}
+
+/* ── Scrollbars ─────────────────────────────────────────────────────────────── */
+::-webkit-scrollbar { width: 4px; }
+::-webkit-scrollbar-track { background: var(--bg2); }
+::-webkit-scrollbar-thumb { background: var(--green-dim); border-radius: 2px; }
+
+/* ── Panel base ─────────────────────────────────────────────────────────────── */
+.panel {
+  background: var(--panel-bg);
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  position: relative;
+  overflow: hidden;
+}
+
+.panel::before {
+  content: '';
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--green-dim), transparent);
+}
+
+.panel-title {
+  font-family: var(--font-crt);
+  font-size: 1.1rem;
+  color: var(--green);
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.panel-title::before {
+  content: '▶';
+  font-size: 0.6rem;
+  color: var(--green-dim);
+}
+
+/* ── Status badge ───────────────────────────────────────────────────────────── */
+.badge {
+  font-family: var(--font-crt);
+  font-size: 0.85rem;
+  padding: 1px 6px;
+  border-radius: 1px;
+  letter-spacing: 0.1em;
+}
+.badge-nominal  { background: rgba(0,255,136,0.12); color: var(--green); border: 1px solid var(--green-dim); }
+.badge-evading  { background: rgba(255,170,0,0.12);  color: var(--amber); border: 1px solid var(--amber); }
+.badge-critical { background: rgba(255,51,51,0.15);  color: var(--red);   border: 1px solid var(--red); }
+.badge-eol      { background: rgba(100,100,100,0.2); color: #888;         border: 1px solid #444; }
+
+/* ── Blinking cursor ────────────────────────────────────────────────────────── */
+@keyframes blink { 0%,100%{opacity:1} 50%{opacity:0} }
+.blink { animation: blink 1s step-end infinite; }
+
+/* ── Pulse ring ─────────────────────────────────────────────────────────────── */
+@keyframes pulse-ring {
+  0%   { transform: scale(0.8); opacity: 0.8; }
+  100% { transform: scale(2.0); opacity: 0; }
+}
