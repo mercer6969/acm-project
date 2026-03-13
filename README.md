@@ -228,21 +228,6 @@ Expected output:
 ✅  Snapshot performance: EXCELLENT (<100ms)
 ```
 
----
-
-## Evaluation Criteria Coverage
-
-| Criteria | Weight | Implementation |
-|---|---|---|
-| Safety Score | 25% | 3-stage conjunction pipeline, autonomous evasion |
-| Fuel Efficiency | 20% | RTN-frame burns, Tsiolkovsky mass tracking |
-| Constellation Uptime | 15% | Station-keeping box, recovery burns |
-| Algorithmic Speed | 15% | KDTree O(N log N), adaptive RK4 step sizing |
-| UI/UX & Visualization | 15% | PS2 3D globe, real-time panels, 60 FPS |
-| Code Quality | 10% | Modular architecture, typed models, logging |
-
----
-
 ## Team
 
 Built for the **National Space Hackathon 2026**.
