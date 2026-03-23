@@ -13,7 +13,7 @@ function FuelBar({ sat }) {
         <span style={{ fontSize: '0.7rem', color: '#a8d8b0', letterSpacing: '0.05em' }}>
           {sat.id}
         </span>
-        <span style={{ fontSize: '0.7rem', color, fontFamily: 'VT323', fontSize: '0.9rem' }}>
+        <span style={{ fontSize: '0.9rem', color, fontFamily: 'VT323', }}>
           {sat.fuel_kg?.toFixed(2)} kg
           {isLow && <span style={{ color: '#ff3333', marginLeft: 6 }} className="blink">⚠ LOW</span>}
         </span>
