@@ -423,56 +423,132 @@ python stress_test.py
 ## Team Solis
 
 Built for the **National Space Hackathon 2026**.
-file structure
+## Project Structure
+
+```
 ACM PROJECT
-    ├
-    app/
-    ├── __pycache__/
-    ├── api/
-    │   ├── __pycache__/
-    │   ├── maneuver.py
-    │   ├── simulate.py
-    │   └── telemetry.py
-    ├── collision/
-    │   ├── __pycache__/
-    │   ├── conjunction.py
-    │   └── spatial_index.py
-    ├── maneuver/
-    │   ├── __pycache__/
-    │   ├── fuel_model.py
-    │   └── planner.py
-    ├── models/
-    │   ├── __pycache__/
-    │   ├── debris.py
-    │   └── satellite.py
-    ├── orbit/
-    │   ├── __pycache__/
-    │   └── propagator.py
-    ├── physics/
-    │   └── __pycache__/
-    │       └── propagator.cpython-314.pyc
-    ├── prediction/
-    │   ├── __pycache__/
-    │   ├── predictor.py
-    │   └── tca.py
-    ├── config.py
-    ├── main.py
-    ├── stress_test.py
-    frontend/
-       ├── node_modules/
-        └── src/
-        │    ├── components/
-        │   │   ├── BullseyePlot.jsx
-        │   │   ├── FuelGauges.jsx
-        │   │   ├── Globe3D.jsx
-        │   │   └── ManeuverTimeline.jsx
-        │   ├── App.jsx
-        │   ├── index.css
-        │   └── main.jsx
-   ├── index.html
-   ├── package-lock.json
-   ├── package.json
-   ├── vite.config.js
- ├── dockerfile
- ├── README.md
- └── requirements.txt   
+├── app/
+│   ├── __pycache__/
+│   ├── api/
+│   │   ├── __pycache__/
+│   │   ├── maneuver.py
+│   │   ├── simulate.py
+│   │   └── telemetry.py
+│   ├── collision/
+│   │   ├── __pycache__/
+│   │   ├── conjunction.py
+│   │   └── spatial_index.py
+│   ├── maneuver/
+│   │   ├── __pycache__/
+│   │   ├── fuel_model.py
+│   │   └── planner.py
+│   ├── models/
+│   │   ├── __pycache__/
+│   │   ├── debris.py
+│   │   └── satellite.py
+│   ├── orbit/
+│   │   ├── __pycache__/
+│   │   └── propagator.py
+│   ├── physics/
+│   │   └── __pycache__/
+│   │       └── propagator.cpython-314.pyc
+│   ├── prediction/
+│   │   ├── __pycache__/
+│   │   ├── predictor.py
+│   │   └── tca.py
+│   ├── config.py
+│   ├── main.py
+│   └── stress_test.py
+│
+├── frontend/
+│   ├── node_modules/
+│   └── src/
+│       ├── components/
+│       │   ├── BullseyePlot.jsx
+│       │   ├── FuelGauges.jsx
+│       │   ├── Globe3D.jsx
+│       │   └── ManeuverTimeline.jsx
+│       ├── App.jsx
+│       ├── index.css
+│       └── main.jsx
+│   ├── index.html
+│   ├── package-lock.json
+│   ├── package.json
+│   └── vite.config.js
+│
+├── dockerfile
+├── README.md
+└── requirements.txt
+```
+## 📁 Project Structure (Explained)
+
+```
+ACM PROJECT
+```
+
+### 🔧 Backend (`app/`)
+Core logic for simulation, prediction, and maneuver planning.
+
+- **api/** → Handles API endpoints (routes)
+  - `simulate.py` → Runs simulation steps
+  - `maneuver.py` → Handles maneuver-related requests
+  - `telemetry.py` → Satellite data / telemetry APIs  
+
+- **collision/** → Collision detection system  
+  - `conjunction.py` → Detects close approaches between objects  
+  - `spatial_index.py` → Optimized spatial searching  
+
+- **maneuver/** → Maneuver planning logic  
+  - `planner.py` → Decides how to avoid collisions  
+  - `fuel_model.py` → Calculates fuel usage  
+
+- **models/** → Data structures  
+  - `satellite.py` → Satellite model  
+  - `debris.py` → Space debris model  
+
+- **orbit/** → Orbital mechanics  
+  - `propagator.py` → Updates satellite position over time  
+
+- **prediction/** → Future risk analysis  
+  - `predictor.py` → Predicts possible collisions  
+  - `tca.py` → Time of Closest Approach calculations  
+
+- `config.py` → Configuration (constants, parameters)  
+- `main.py` → Entry point (starts backend server)  
+- `stress_test.py` → Performance testing  
+
+---
+
+### 🌐 Frontend (`frontend/`)
+User interface built with React + Vite.
+
+- **src/components/** → UI components  
+  - `Globe3D.jsx` → 3D Earth visualization  
+  - `BullseyePlot.jsx` → Collision visualization  
+  - `FuelGauges.jsx` → Fuel usage display  
+  - `ManeuverTimeline.jsx` → Timeline of maneuvers  
+
+- `App.jsx` → Main app component  
+- `main.jsx` → React entry point  
+- `index.css` → Styling  
+
+- `index.html` → Root HTML file  
+- `package.json` → Project dependencies  
+- `vite.config.js` → Vite configuration  
+
+---
+
+### ⚙️ Other Files
+
+- `dockerfile` → Container setup  
+- `requirements.txt` → Python dependencies  
+- `README.md` → Project documentation  
+
+---
+
+### 💡 Summary
+This project simulates **satellite collision detection and avoidance**, combining:
+- Orbital physics  
+- Collision prediction  
+- Maneuver planning  
+- Interactive 3D visualization  
