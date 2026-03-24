@@ -420,6 +420,59 @@ python stress_test.py
 
 ---
 
-## Team
+## Team Solis
 
 Built for the **National Space Hackathon 2026**.
+file structure
+ACM PROJECT
+    ├
+    app/
+    ├── __pycache__/
+    ├── api/
+    │   ├── __pycache__/
+    │   ├── maneuver.py
+    │   ├── simulate.py
+    │   └── telemetry.py
+    ├── collision/
+    │   ├── __pycache__/
+    │   ├── conjunction.py
+    │   └── spatial_index.py
+    ├── maneuver/
+    │   ├── __pycache__/
+    │   ├── fuel_model.py
+    │   └── planner.py
+    ├── models/
+    │   ├── __pycache__/
+    │   ├── debris.py
+    │   └── satellite.py
+    ├── orbit/
+    │   ├── __pycache__/
+    │   └── propagator.py
+    ├── physics/
+    │   └── __pycache__/
+    │       └── propagator.cpython-314.pyc
+    ├── prediction/
+    │   ├── __pycache__/
+    │   ├── predictor.py
+    │   └── tca.py
+    ├── config.py
+    ├── main.py
+    ├── stress_test.py
+    frontend/
+       ├── node_modules/
+        └── src/
+        │    ├── components/
+        │   │   ├── BullseyePlot.jsx
+        │   │   ├── FuelGauges.jsx
+        │   │   ├── Globe3D.jsx
+        │   │   └── ManeuverTimeline.jsx
+        │   ├── App.jsx
+        │   ├── index.css
+        │   └── main.jsx
+   ├── index.html
+   ├── package-lock.json
+   ├── package.json
+   ├── vite.config.js
+ ├── dockerfile
+ ├── README.md
+ └── requirements.txt   
