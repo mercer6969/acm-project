@@ -64,3 +64,25 @@ def snapshot():
         "satellites": sat_list,
         "debris_cloud": debris_cloud,
     }
+
+#--Ground station, maneuver, and station-keeping API routers (required by spec §6.2) ───────────────────
+    from fastapi.middleware.cors import CORSMiddleware
+
+    from app.api.ground_stations import router as gs_router
+    from app.api.maneuver        import router as maneuver_router
+    from app.api.station_keeping import router as sk_router
+ 
+    app = FastAPI(title="ACM Backend", version="1.0.0")
+ 
+    app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000"],   # your React frontend
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+ 
+
+    app.include_router(gs_router,       prefix="/api/ground-stations",  tags=["Ground Stations"])
+    app.include_router(maneuver_router, prefix="/api/maneuver",         tags=["Maneuver"])
+    app.include_router(sk_router,       prefix="/api/station-keeping",  tags=["Station Keeping"])
