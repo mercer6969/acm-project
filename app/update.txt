@@ -580,4 +580,44 @@ Autonomous Collision Management System
    - Every decision point now logged including rejections (cooldown, no fuel)
      so grader audit trail is complete
 
+═══════════════════════════════════════════════════════════════
+Issue #8 — Snapshot payload size choking the frontend
+═══════════════════════════════════════════════════════════════
+What was wrong
+
+/api/visualization/snapshot serialized all debris unconditionally every 2s poll
+No altitude or proximity filtering — 10k objects = ~350KB/poll even with tuples
+Globe3D destroyed and recreated the entire InstancedMesh every tick (full GPU realloc)
+
+═══════════════════════════════════════════════════════════════
+What changed
+app/main.py
+
+Added band query param (default leo) — filters debris to 160–2000 km altitude only
+Added proximity_km query param (default 500) — skips debris farther than 500 km ECI from every tracked satellite
+Added _eci_distance_sq() helper using squared distance (no sqrt) for fast culling
+Response now includes debris_total / debris_shown so filter efficiency is observable
+
+frontend/src/App.jsx
+
+Snapshot fetch now passes band and proximity_km params
+HUD debris counter shows 247/10000 ratio when filtering is active
+SNAP_BAND and SNAP_PROXIMITY_KM constants at top of file for easy tuning
+
+frontend/src/components/Globe3D.jsx
+
+Reuse InstancedMesh across polls instead of destroy/recreate every 2s
+Only reallocates GPU buffer when live count exceeds current capacity
+Uses mesh.count to hide unused tail when filtered set shrinks
+═══════════════════════════════════════════════════════════════
+Impact
+Payload (10k debris)Before (tuples, no filter)~350 KB/pollAfter (LEO band + proximity)~10–40 KB/poll
+Not changed
+
+Tuple format [ID, lat, lon, alt] was already spec-compliant ✓
+═══════════════════════════════════════════════════════════════
+Follow-up
+
+Add GZipMiddleware to FastAPI for a further ~70% compression with one line
+since param stubbed in for future delta-mode support
 
