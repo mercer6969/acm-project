@@ -552,4 +552,32 @@ TEAMMATE WARNINGS
      at the top — do not create a second app instance.
 
 
+═══════════════════════════════════════════════════════════════
+ACM PROJECT — BACKEND CHAIN UPDATE-4-(shreyansh)
+Autonomous Collision Management System
+═══════════════════════════════════════════════════════════════
+
+
+1. STRUCTURED EVENT LOGGING (Problem 6) — app/logger.py [NEW FILE]
+   - Added complete structured logging system
+   - Every CDM detection, maneuver planned/executed, recovery scheduled/executed,
+     EOL trigger, and graveyard burn now writes a JSON line to acm_events.log
+   - In-memory ring buffer (last 500 events) exposed via GET /api/events
+   - Zero new dependencies — uses Python standard library only
+
+2. NOMINAL SLOT PROPAGATION (Problem 7) — app/models/satellite.py [UPDATED]
+   - propagate_nominal() now uses same RK4+J2 propagator as real position
+   - Eliminates phantom station-keeping penalties caused by nominal slot
+     drifting differently from real satellite position
+   - Added distance_to_slot() and in_station_keeping_box() as proper methods
+   - Fixed cooldown_remaining property (was always returning 0.0) →
+     replaced with is_on_cooldown(sim_time) method
+
+3. PLANNER LOGGING INTEGRATION — app/maneuver/planner.py [UPDATED]
+   - All 6 logging call sites wired into Avneesh's geometry-aware planner
+   - Graveyard burn direction fixed: was retrograde (sat.v -= dv, deorbit)
+     corrected to prograde (sat.v += dv, raises apogee to graveyard orbit)
+   - Every decision point now logged including rejections (cooldown, no fuel)
+     so grader audit trail is complete
+
 
