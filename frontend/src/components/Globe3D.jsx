@@ -99,7 +99,7 @@ function createSatelliteModel(color = 0x00ff88) {
   group.add(panelR)
 
   // Panel cell lines — flat on panel face, visible from viewer side
-const cellMat = new THREE.MeshBasicMaterial({ color: 0xbfeff })
+const cellMat = new THREE.MeshBasicMaterial({ color: 0x0bfeff })
 
 // Horizontal dividers (run across full panel width)
 for (let i = -2; i <= 2; i++) {
@@ -154,7 +154,7 @@ for (let i = -2; i <= 2; i++) {
 
   return group
 }
-/* ── Instanced debris cloud -needs update */
+/* ── Instanced debris cloud — reuse mesh, only resize if count changes */
 function createDebrisCloud(scene, count) {
   const geo  = new THREE.TetrahedronGeometry(0.003, 0)
   const mat  = new THREE.MeshBasicMaterial({ color: 0xff2200 })
@@ -166,13 +166,14 @@ function createDebrisCloud(scene, count) {
 
 // ── Main component
 
-export default function Globe3D({ satellites = [], debrisCloud = [], selectedSat = null }) {
+export default function Globe3D({ satellites = [], debrisCloud = [], selectedSat = null, onSelectSat = null }) {
   const mountRef   = useRef(null)
   const sceneRef   = useRef(null)
   const earthRef   = useRef(null)
   const frameRef   = useRef(null)
   const satModels  = useRef({})
-  const debrisMesh = useRef(null)
+  const debrisMesh     = useRef(null)
+  const debrisCapacity = useRef(0)  // tracks allocated InstancedMesh size
 
   /*  Init scene */
   useEffect(() => {
@@ -196,7 +197,9 @@ export default function Globe3D({ satellites = [], debrisCloud = [], selectedSat
     const sun = new THREE.DirectionalLight(0xffeedd, 1.8)
     sun.position.set(4, 2, 3)
     scene.add(sun)
-    scene.add(new THREE.DirectionalLight(0x112244, 0.2).position.set(-3, -1, -2) && new THREE.DirectionalLight(0x112244, 0.2))
+    const fillLight = new THREE.DirectionalLight(0x112244, 0.2)
+    fillLight.position.set(-3, -1, -2)
+    scene.add(fillLight)
     scene.add(new THREE.AmbientLight(0x0a0f18, 0.2))
 
 
@@ -245,6 +248,42 @@ export default function Globe3D({ satellites = [], debrisCloud = [], selectedSat
     window.addEventListener('mousemove', onMove)
     renderer.domElement.addEventListener('wheel', onWheel)
 
+    // ── Satellite click-to-select via raycaster ───────────────────────────────
+    const raycaster = new THREE.Raycaster()
+    const mouse     = new THREE.Vector2()
+    let   mouseDownPos = { x: 0, y: 0 }
+
+    const onClickSelect = (e) => {
+      // Only fire if mouse didn't move (i.e. it's a click, not a drag)
+      if (Math.abs(e.clientX - mouseDownPos.x) > 4 || Math.abs(e.clientY - mouseDownPos.y) > 4) return
+      if (!onSelectSat) return
+
+      const rect = renderer.domElement.getBoundingClientRect()
+      mouse.x =  ((e.clientX - rect.left)  / rect.width)  * 2 - 1
+      mouse.y = -((e.clientY - rect.top)   / rect.height) * 2 + 1
+
+      raycaster.setFromCamera(mouse, camera)
+      const meshes = Object.entries(satModels.current)
+        .filter(([k]) => !k.endsWith('_trail') && !k.endsWith('_ring'))
+        .map(([k, m]) => ({ id: k, mesh: m }))
+
+      const hits = raycaster.intersectObjects(meshes.map(x => x.mesh), true)
+      if (hits.length > 0) {
+        // Walk up to find which sat group was hit
+        let obj = hits[0].object
+        while (obj.parent && obj.parent.type !== 'Scene') obj = obj.parent
+        const entry = meshes.find(x => x.mesh === obj)
+        if (entry) {
+          const sat = satellites.find(s => s.id === entry.id)
+          if (sat) onSelectSat(sat)
+        }
+      }
+    }
+
+    const onMouseDownRecord = (e) => { mouseDownPos = { x: e.clientX, y: e.clientY } }
+    renderer.domElement.addEventListener('mousedown', onMouseDownRecord)
+    renderer.domElement.addEventListener('click', onClickSelect)
+
     const animate = () => {
       frameRef.current = requestAnimationFrame(animate)
       if (!isDragging && earthRef.current) earthRef.current.rotation.y += 0.001
@@ -267,24 +306,36 @@ export default function Globe3D({ satellites = [], debrisCloud = [], selectedSat
       window.removeEventListener('mouseup', onUp)
       window.removeEventListener('mousemove', onMove)
       window.removeEventListener('resize', onResize)
+      renderer.domElement.removeEventListener('click', onClickSelect)
+      renderer.domElement.removeEventListener('mousedown', onMouseDownRecord)
       renderer.dispose()
       if (mountRef.current) mountRef.current.innerHTML = ''
     }
   }, [])
 
-  /*Update debris pls */
+  /*Update debris — reuse InstancedMesh; only reallocate if count grows */
   useEffect(() => {
     if (!sceneRef.current || !debrisCloud) return
     const { scene } = sceneRef.current
 
-    if (debrisMesh.current) {
-      scene.remove(debrisMesh.current)
-      debrisMesh.current.geometry.dispose()
-      debrisMesh.current = null
+    const count = debrisCloud.length
+    if (count === 0) {
+      // Hide existing mesh rather than remove — avoids GC churn
+      if (debrisMesh.current) debrisMesh.current.count = 0
+      return
     }
-    if (debrisCloud.length === 0) return
 
-    const mesh  = createDebrisCloud(scene, debrisCloud.length)
+    // Reallocate only when capacity is exceeded (growing debris set)
+    if (!debrisMesh.current || debrisCapacity.current < count) {
+      if (debrisMesh.current) {
+        scene.remove(debrisMesh.current)
+        debrisMesh.current.geometry.dispose()
+      }
+      debrisMesh.current = createDebrisCloud(scene, count)
+      debrisCapacity.current = count
+    }
+
+    const mesh  = debrisMesh.current
     const dummy = new THREE.Object3D()
     debrisCloud.forEach(([, lat, lon, alt], i) => {
       dummy.position.copy(latLonToVec3(lat, lon, alt))
@@ -292,8 +343,9 @@ export default function Globe3D({ satellites = [], debrisCloud = [], selectedSat
       dummy.updateMatrix()
       mesh.setMatrixAt(i, dummy.matrix)
     })
+    // Only render the visible slice (handles shrinking sets without realloc)
+    mesh.count = count
     mesh.instanceMatrix.needsUpdate = true
-    debrisMesh.current = mesh
   }, [debrisCloud])
 
   /* satellite update pls  */

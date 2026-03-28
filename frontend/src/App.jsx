@@ -7,6 +7,12 @@ import ManeuverTimeline from './components/ManeuverTimeline'
 const API = ''  // proxied via vite → localhost:8000
 const POLL_MS = 2000
 
+// Snapshot filter config — tune to trade visibility vs bandwidth
+// band:         'leo' | 'meo' | 'geo' | 'all'
+// proximity_km: only show debris within this distance of any satellite (0 = off)
+const SNAP_BAND         = 'leo'
+const SNAP_PROXIMITY_KM = 500
+
 export default function App() {
   const [snapshot, setSnapshot]       = useState(null)
   const [warnings, setWarnings]       = useState([])
@@ -17,12 +23,17 @@ export default function App() {
   const [stepLog, setStepLog]         = useState([])
   const pollRef = useRef(null)
 
+  const [snapMeta, setSnapMeta] = useState({ total: 0, shown: 0 })
+
   // ── Poll snapshot + active maneuvers ──────────────────────────────────────
   const fetchSnapshot = useCallback(async () => {
     try {
+      // Build snapshot URL with payload-size filters
+      const snapUrl = `${API}/api/visualization/snapshot?band=${SNAP_BAND}&proximity_km=${SNAP_PROXIMITY_KM}`
+
       // Fetch snapshot and active maneuvers in parallel
       const [snapRes, manRes] = await Promise.all([
-        fetch(`${API}/api/visualization/snapshot`),
+        fetch(snapUrl),
         fetch(`${API}/api/maneuvers/active`),
       ])
 
@@ -32,6 +43,10 @@ export default function App() {
       setSnapshot(snapData)
       setSimTime(snapData.sim_time_s ?? 0)
       setConnected(true)
+      setSnapMeta({
+        total: snapData.debris_total ?? snapData.debris_cloud?.length ?? 0,
+        shown: snapData.debris_shown ?? snapData.debris_cloud?.length ?? 0,
+      })
 
       // Update maneuvers from active endpoint
       if (manRes.ok) {
@@ -69,6 +84,11 @@ export default function App() {
         collisions: data.collisions_detected,
         maneuvers: data.maneuvers_executed,
       }, ...prev].slice(0, 8))
+
+      // Store warnings from step so BullseyePlot and sat badges update
+      if (data.warnings != null) {
+        setWarnings(data.warnings)
+      }
 
       // Merge step maneuvers into state (avoid duplicates by burn_id)
       if (data.maneuvers?.length > 0) {
@@ -128,6 +148,9 @@ export default function App() {
             SATS: <span style={{ color: '#00ff88' }}>{sats.length}</span>
             &nbsp;|&nbsp;
             DEBRIS: <span style={{ color: '#ff3333' }}>{debrisCloud.length}</span>
+            {snapMeta.total > snapMeta.shown && (
+              <span style={{ color: '#3a6a4a' }}>/{snapMeta.total}</span>
+            )}
             &nbsp;|&nbsp;
             BURNS: <span style={{ color: '#ffaa00' }}>{maneuvers.length}</span>
             &nbsp;|&nbsp;
