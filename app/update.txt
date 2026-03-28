@@ -1,5 +1,5 @@
 ═══════════════════════════════════════════════════════════════
-  ACM PROJECT — BACKEND CHAIN UPDATE
+  ACM PROJECT — BACKEND CHAIN UPDATE-1-(shreya)
   Autonomous Collision Management System
 ═══════════════════════════════════════════════════════════════
  
@@ -172,8 +172,8 @@ FILES DELIVERED
   main_additions.py            — router registration snippet
 
   ═══════════════════════════════════════════════════════════════
- 
-  ACM PROJECT — CRITICAL LOS FIX
+ ----------------------------------------------------------------------------------------------------------------
+  ACM PROJECT — CRITICAL LOS FIX---UPDATE-2(shreya)
   Autonomous Collision Management System
   Update #2
  
@@ -284,3 +284,285 @@ FILES DELIVERED IN THIS UPDATE
   app/api/maneuver.py  — UPDATED: real LOS wired in
  
 ═══════════════════════════════════════════════════════════════
+----------------------------------------------------------------------------------------------
+ACM PROJECT — SESSION UPDATE LOG-3(avneesh)
+Autonomous Collision Management System
+═══════════════════════════════════════════════════════════════
+
+
+SESSION SUMMARY
+─────────────────────────────────────────────────────────────
+Fixed 4 critical issues from the review document.
+All changes are isolated to 3 files:
+
+  app/main.py              — Issues 3, 9, 10 + broken router merge
+  app/maneuver/planner.py  — Issues 4 + 5
+  Dockerfile               — Issue 9
+  requirements.txt         — Issue 10
+
+
+═══════════════════════════════════════════════════════════════
+ISSUE 3 — ECI → lat/lon was using wall-clock time (FIXED)
+═══════════════════════════════════════════════════════════════
+
+File: app/main.py → snapshot() → eci_to_latlon()
+
+Problem:
+  The snapshot endpoint converted ECI positions to lat/lon using
+  datetime.now() to compute Earth's rotation. This means after
+  fast-forwarding the simulation 6 hours via /simulate/step, all
+  satellites appeared at the correct ECI coordinates but wrong
+  Earth-relative longitudes — everything was shifted west.
+
+Fix:
+  Now uses Greenwich Sidereal Time (GST) computed from simulation
+  elapsed time (get_sim_time()), not wall-clock time.
+
+  GST formula used:
+    GST0     = 280.46061837 degrees  (J2000 epoch)
+    EARTH_ROT = 360.98564724 / 86164.1  degrees per second
+    gst_deg  = (GST0 + EARTH_ROT × sim_time_s) % 360
+
+  ECI longitude is then rotated by subtracting gst_deg before
+  returning the ECEF longitude to the frontend.
+
+Impact:
+  Globe now shows satellites at correct Earth-relative positions
+  even after large simulation time jumps. UI score (15%) protected.
+
+
+═══════════════════════════════════════════════════════════════
+ISSUE 4 — Evasion direction wrong for many approach geometries (FIXED)
+═══════════════════════════════════════════════════════════════
+
+File: app/maneuver/planner.py → compute_evasion_dv()
+
+Problem:
+  Old code always burned in the transverse (prograde/retrograde)
+  direction regardless of how the debris was actually approaching.
+  For head-on approaches, a prograde burn increases closing speed.
+  For debris approaching from above/below, transverse burn does nothing.
+
+Fix:
+  New function compute_evasion_dv() uses actual approach geometry:
+
+  1. Computes RTN axes (Radial, Transverse, Normal) from sat state
+  2. Finds relative position vector at Time of Closest Approach (TCA)
+     using linear approximation
+  3. Decomposes relative position into RTN components
+  4. Chooses burn axis based on dominant approach direction:
+
+     Debris approaching transversely (head-on / tail-on)
+       → Burn RADIAL — shifts altitude, changes crossing time
+
+     Debris approaching radially (from above / below)
+       → Burn TRANSVERSE — most fuel-efficient phase shift
+
+     Debris approaching normally (out of plane)
+       → Burn TRANSVERSE — avoids expensive plane-change burns
+
+  5. Burn sign chosen to push satellite AWAY from debris at TCA
+
+New helpers added:
+  compute_rtn_axes(r, v)         — returns R, T, N unit vectors in ECI
+  rtn_to_eci(dv_rtn, r, t, n)   — converts RTN delta-v to ECI frame
+
+Impact:
+  Evasion now geometrically correct for all approach angles.
+  Safety Score (25%) and Fuel Efficiency (20%) both protected.
+
+
+═══════════════════════════════════════════════════════════════
+ISSUE 5 — Recovery burn hardcoded at T+660s (FIXED)
+═══════════════════════════════════════════════════════════════
+
+File: app/maneuver/planner.py → execute_scheduled_burns()
+                               → _schedule_recovery_when_clear()
+                               → _threat_still_active()
+
+Problem:
+  Recovery burn was always scheduled at current_time + 660s
+  (600s cooldown + 60s buffer), regardless of when the debris
+  actually clears. If TCA is 2 hours away, recovery fires while
+  satellite is still in the conjunction zone.
+
+Fix:
+  Recovery burns now store the threat debris ID and check if the
+  threat has actually cleared before firing.
+
+  New function _threat_still_active(sat_id, debris_id):
+    → Computes current distance between satellite and debris
+    → Returns True if distance < 0.5 km (SAFE_DISTANCE_KM)
+
+  In execute_scheduled_burns():
+    → If recovery burn is due AND threat still active
+      → Delay burn by RECOVERY_CHECK_INTERVAL_S (300s = 5 min)
+      → Retry next simulation tick
+    → If threat has cleared AND cooldown expired
+      → Fire recovery burn, set sat.status = "NOMINAL"
+
+  Scheduled burn dict now stores:
+    "threat_debris_id"  — which debris to check against
+    "min_clear_time"    — earliest possible recovery time
+
+Impact:
+  Recovery burns no longer fire into active conjunction zones.
+  Constellation Uptime (15%) and Safety Score (25%) protected.
+
+
+═══════════════════════════════════════════════════════════════
+ISSUE 9 — Docker only served backend (FIXED)
+═══════════════════════════════════════════════════════════════
+
+Files: Dockerfile (full rewrite)
+       app/main.py (static file serving added)
+       requirements.txt (aiofiles added)
+
+Problem:
+  Dockerfile only built and served the Python backend on port 8000.
+  The React frontend only worked in local dev via Vite on port 3000.
+  For the video demo and any judge testing, both needed to work
+  from a single Docker container.
+
+Fix — Dockerfile is now multi-stage:
+
+  Stage 1 (node:20-slim):
+    → Copies frontend/ source
+    → Runs npm install + npm run build
+    → Outputs production bundle to /frontend/dist
+
+  Stage 2 (ubuntu:22.04 — required base image):
+    → Copies Python backend
+    → Copies built frontend from Stage 1 into /acm/static/
+    → Runs uvicorn on port 8000
+
+Fix — app/main.py now serves frontend:
+
+  If /acm/static/ directory exists (i.e. running in Docker):
+    → Mounts /assets via FastAPI StaticFiles
+    → Catch-all route serves index.html for all non-API paths
+    → React SPA routing works correctly
+
+  If /acm/static/ does not exist (local dev):
+    → Static serving is skipped entirely
+    → Vite on port 3000 works exactly as before
+    → Zero changes to local dev workflow
+
+Impact:
+  Single docker run -p 8000:8000 acm serves full stack.
+  Video demo works from Docker. Grader auto-test unaffected.
+
+
+═══════════════════════════════════════════════════════════════
+ISSUE 10 — requirements.txt incomplete (FIXED)
+═══════════════════════════════════════════════════════════════
+
+File: requirements.txt
+
+Added:
+  aiofiles==23.2.1       — required by FastAPI StaticFiles
+  python-dateutil==2.9.0 — required for ISO timestamp parsing
+
+Full requirements.txt now:
+  fastapi==0.111.0
+  uvicorn==0.29.0
+  pydantic==2.7.1
+  numpy==1.26.4
+  scikit-learn==1.4.2
+  aiofiles==23.2.1
+  python-dateutil==2.9.0
+
+
+═══════════════════════════════════════════════════════════════
+BROKEN main.py MERGE (FIXED)
+═══════════════════════════════════════════════════════════════
+
+File: app/main.py
+
+Problem:
+  The teammate's ground station / station-keeping router additions
+  were indented as if inside a function body and created a second
+  app = FastAPI(...) instance at the bottom of the file. This:
+    → Overrode the first app instance
+    → Wiped out all telemetry / simulate routes
+    → CORS middleware was never applied
+    → gs_router and sk_router were never registered
+
+Fix:
+  Complete clean rewrite of main.py with single app instance,
+  all 5 routers registered at top level:
+    telemetry_router   → /api/telemetry
+    simulate_router    → /api/simulate
+    maneuver_router    → /api/maneuver
+    gs_router          → /api/ground-stations
+    sk_router          → /api/station-keeping
+
+  CORS middleware properly added before all routes.
+  All imports at module level (not inside functions).
+
+
+═══════════════════════════════════════════════════════════════
+FILES CHANGED THIS SESSION
+═══════════════════════════════════════════════════════════════
+
+  app/main.py              REPLACED  — GST fix, router merge fix,
+                                       static serving, CORS
+  app/maneuver/planner.py  REPLACED  — geometry-aware evasion,
+                                       TCA-aware recovery
+  Dockerfile               REPLACED  — multi-stage Node + Python build
+  requirements.txt         REPLACED  — added aiofiles, python-dateutil
+
+
+═══════════════════════════════════════════════════════════════
+FILES NOT TOUCHED — SAFE FOR TEAMMATES
+═══════════════════════════════════════════════════════════════
+
+  app/api/telemetry.py       — unchanged
+  app/api/simulate.py        — unchanged
+  app/api/maneuver.py        — unchanged
+  app/api/ground_stations.py — unchanged (teammate owns)
+  app/api/station_keeping.py — unchanged (teammate owns)
+  app/orbit/propagator.py    — unchanged
+  app/collision/             — unchanged
+  app/prediction/tca.py      — unchanged (teammate warning: do not
+                               change return signature of propagated_tca)
+  app/models/                — unchanged
+  app/config.py              — unchanged
+  frontend/                  — unchanged
+  stress_test.py             — unchanged
+
+
+═══════════════════════════════════════════════════════════════
+TEAMMATE WARNINGS
+═══════════════════════════════════════════════════════════════
+
+  1. prediction/tca.py
+     planner.py imports propagated_tca(sat_r, sat_v, deb_r, deb_v).
+     Do NOT change the function signature or return format.
+     Returns: (t_ca_seconds: float, min_distance_km: float)
+
+  2. maneuver/planner.py
+     This file is now fully owned by this branch.
+     Do not edit plan_maneuver() or execute_scheduled_burns()
+     without syncing first.
+
+  3. app/main.py
+     Router registration is now clean and complete.
+     If adding new routers, append to the registration block
+     at the top — do not create a second app instance.
+
+
+═══════════════════════════════════════════════════════════════
+REMAINING OPEN ISSUES (not done this session)
+═══════════════════════════════════════════════════════════════
+
+  Issue 1 — physics/propagator.py still exists (DELETE IT)
+             10 seconds: just delete app/physics/propagator.py
+
+  Issue 2 — Ground station LOS (teammate doing this)
+
+  Issue 6 — Structured maneuver/CDM logging (not started)
+
+  Issue 7 — Nominal slot propagation confirmation (verify with teammate)
+
+  Issue 8 — Snapshot payload size (monitor after stress test)
