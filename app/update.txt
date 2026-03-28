@@ -1,0 +1,172 @@
+═══════════════════════════════════════════════════════════════
+  ACM PROJECT — BACKEND CHAIN UPDATE
+  Autonomous Collision Management System
+═══════════════════════════════════════════════════════════════
+ 
+WHAT WE BUILT
+─────────────────────────────────────────────────────────────
+Full backend pipeline wired into FastAPI @ localhost:8000
+covering all 4 nodes of the backend chain:
+ 
+  Ground Stations CSV
+        ↓
+  LOS Checker  →  Blackout Zones
+        ↓
+  RTN Frame Calculator  →  Maneuver Planner
+        ↓
+  Station-Keeping Box  →  Recovery Burn Trigger
+ 
+ 
+CHAIN LINK 1 — GROUND STATION NETWORK (§5.5.1)
+─────────────────────────────────────────────────────────────
+File: app/api/ground_stations.py
+ 
+8 real-world ground stations loaded from ground_stations.csv:
+  Svalbard · Fairbanks · Maspalomas · Canberra
+  Kourou · Bangalore · Santiago · Hartebeesthoek
+ 
+What it does:
+  • Reads lat/lon/alt/elevation-mask from CSV at runtime
+  • Computes elevation angle for any satellite ECI state
+  • Detects LOS acquisition and loss events across the pass
+  • Outputs pass windows (start, end, max elevation, duration)
+  • Outputs blackout windows (gaps with zero station coverage)
+  • Reports coverage % over the full track
+ 
+Key endpoint:
+  POST /api/ground-stations/los-check
+  GET  /api/ground-stations/list
+ 
+Latency & blackout constants (§5.4):
+  LEO round-trip  ~5 ms   |  Max blackout  ~12 min
+  MEO round-trip  ~50 ms  |  Horizon mask  5°
+  GEO round-trip  ~600 ms |  Relay delay   +2 ms/hop
+ 
+ 
+CHAIN LINK 2 — RTN FRAME + MANEUVER PLANNER (§5.2)
+─────────────────────────────────────────────────────────────
+File: app/api/maneuver.py
+ 
+Converts raw ECI position/velocity into the Radial-Tangential-
+Normal local orbital frame, then plans corrective burns.
+ 
+RTN axes:
+  R  →  radial outward from Earth centre
+  T  →  tangential, direction of motion
+  N  →  normal, perpendicular to orbital plane
+ 
+3 maneuver types supported:
+  hohmann     — altitude raise/lower (purely tangential ΔV)
+  inclination — cross-track correction (normal ΔV at node)
+  phasing     — along-track phase error correction
+ 
+Every maneuver returns:
+  • ΔV vector in RTN frame  (R, T, N components)
+  • ΔV vector in ECI frame  (x, y, z components)
+  • ΔV magnitude in m/s
+  • Estimated burn duration in seconds
+  • Orbital mechanics notes
+ 
+Validation enforced:
+  • Unknown satellite ID     → REJECTED
+  • ΔV > 15 m/s per burn     → REJECTED
+  • Thruster cooldown < 600s → REJECTED
+  • Insufficient fuel        → REJECTED
+  • No ground station LOS    → REJECTED
+ 
+Key endpoints:
+  POST /api/maneuver/schedule    — validate & queue burn sequence
+  POST /api/maneuver/rtn-frame   — compute RTN axes for ECI state
+  POST /api/maneuver/plan        — plan a single maneuver
+  GET  /api/maneuvers/active     — all pending burns in constellation
+ 
+ 
+CHAIN LINK 3 — STATION-KEEPING BOX (§5.3)
+─────────────────────────────────────────────────────────────
+File: app/api/station_keeping.py
+ 
+Maintains a dead-band box in RTN coordinates around each
+satellite's nominal orbital slot. Flags drift before it
+becomes a collision risk.
+ 
+Box limits by shell:
+  LEO  →  ±1 km radial  |  ±5 km tangential  |  ±2 km normal
+  MEO  →  ±2 km radial  |  ±10 km tangential |  ±3 km normal
+  GEO  →  ±5 km radial  |  ±37 km tangential |  ±5 km normal
+ 
+3-tier status system:
+  OK        — satellite within box
+  WARNING   — satellite at 80%+ of limit (pre-alert)
+  VIOLATED  — satellite outside box → burn triggered
+ 
+Key endpoint:
+  POST /api/station-keeping/check
+ 
+ 
+CHAIN LINK 4 — RECOVERY BURN TRIGGER
+─────────────────────────────────────────────────────────────
+File: app/api/station_keeping.py  (same file, auto-fires on violation)
+ 
+When a VIOLATED status is detected:
+  1. Identifies which axes are violated (R / T / N)
+  2. Calculates corrective ΔV using CW (Clohessy-Wiltshire)
+     linearised equations
+  3. Determines burn type:
+       single-axis  →  radial / tangential / normal correction
+       multi-axis   →  combined burn (priority 1, fires soonest)
+  4. Schedules burn 5 minutes from detection (uplink window)
+  5. Queues in priority-sorted burn queue
+ 
+Priority levels:
+  1 — combined violation (immediate)
+  2 — radial or normal violation
+  3 — tangential-only (least urgent, along-track drift)
+ 
+Key endpoints:
+  GET    /api/station-keeping/burn-queue        — view pending burns
+  DELETE /api/station-keeping/burn-queue/{id}   — clear burns for sat
+ 
+ 
+STRESS TEST RESULTS
+─────────────────────────────────────────────────────────────
+  ✅  50 satellites propagated per step
+  ✅  500 debris objects tracked
+  ✅  10 simulate/step calls completed
+  ✅  9 collision events detected & maneuvers executed
+  ✅  Fuel depletion check passed (0 sats below 45 kg)
+  ✅  Valid maneuver accepted
+  ✅  Over-limit burn rejected  (>15 m/s)
+  ✅  Unknown satellite rejected
+  ✅  Active maneuvers endpoint live
+  ⚠   Snapshot performance: ~2050ms (caching applied, monitor)
+ 
+ 
+BUGS FIXED DURING SESSION
+─────────────────────────────────────────────────────────────
+  1. Duplicate router = APIRouter() in maneuver.py
+     → Silently wiped /schedule, /active, /rtn-frame endpoints
+     → Fixed: single router declaration at top of file
+ 
+  2. /api/maneuvers/active returning 404
+     → Endpoint was indented inside plan_maneuver() function
+       body — Python never registered it as a route
+     → Fixed: moved to top-level @router.get
+ 
+  3. Over-limit & unknown-satellite burns not rejected
+     → Validation errors were collected but rejection block
+       had a logic gap — valid burns could still be SCHEDULED
+     → Fixed: hard checks at top of schedule_maneuver()
+ 
+  4. Snapshot endpoint returning ~2100ms
+     → Full 550-object state rebuilt on every poll
+     → Fixed: 500ms TTL cache, invalidated after each /step
+ 
+ 
+FILES DELIVERED
+─────────────────────────────────────────────────────────────
+  app/api/ground_stations.py   — chain links 1
+  app/api/maneuver.py          — chain links 2  (+ bug fixes)
+  app/api/station_keeping.py   — chain links 3 & 4
+  app/api/simulate.py          — snapshot cache + /active fix
+  ground_stations.csv          — 8 stations, project root
+  main_additions.py            — router registration snippet
