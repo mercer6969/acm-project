@@ -33,7 +33,7 @@ app.add_middleware(
 # ── Register all routers ───────────────────────────────────────────────────────
 app.include_router(telemetry_router)
 app.include_router(simulate_router)
-app.include_router(maneuver_router,  prefix="/api/maneuver",         tags=["Maneuver"])
+app.include_router(maneuver_router,  tags=["Maneuver"])
 app.include_router(gs_router,        prefix="/api/ground-stations",  tags=["Ground Stations"])
 app.include_router(sk_router,        prefix="/api/station-keeping",  tags=["Station Keeping"])
 
