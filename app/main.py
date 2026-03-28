@@ -132,3 +132,4 @@ else:
     @app.get("/")
     def root():
         return {"status": "ACM Running — frontend on http://localhost:3000"}
+        
