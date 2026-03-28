@@ -552,17 +552,4 @@ TEAMMATE WARNINGS
      at the top — do not create a second app instance.
 
 
-═══════════════════════════════════════════════════════════════
-REMAINING OPEN ISSUES (not done this session)
-═══════════════════════════════════════════════════════════════
 
-  Issue 1 — physics/propagator.py still exists (DELETE IT)
-             10 seconds: just delete app/physics/propagator.py
-
-  Issue 2 — Ground station LOS (teammate doing this)
-
-  Issue 6 — Structured maneuver/CDM logging (not started)
-
-  Issue 7 — Nominal slot propagation confirmation (verify with teammate)
-
-  Issue 8 — Snapshot payload size (monitor after stress test)
