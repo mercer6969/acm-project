@@ -552,3 +552,266 @@ This project simulates **satellite collision detection and avoidance**, combinin
 - Collision prediction  
 - Maneuver planning  
 - Interactive 3D visualization  
+### CONTEXT.md
+-------------------------------------------------------------------------------------------------------------------------------------------------
+# ACM Project — CONTEXT.md
+> Read this file first. It gives a complete picture of the codebase so you can jump in without asking basic questions.
+
+---
+
+## What This Project Is
+
+An **Autonomous Constellation Manager (ACM)** built for the National Space Hackathon 2026. It is a full-stack system that:
+
+1. Ingests real-time orbital telemetry (position + velocity) for satellites and debris
+2. Predicts collisions up to 24 hours ahead using a 3-stage spatial filtering pipeline
+3. Autonomously plans and executes evasion + recovery maneuvers
+4. Renders everything on a PS1/Mouthwashing-style 3D globe dashboard
+
+**Stack:** Python 3.14 + FastAPI backend, React 18 + Three.js frontend, Docker for deployment.
+
+---
+
+## Project Structure
+
+```
+ACM PROJECT/
+├── app/                        # All backend Python code
+│   ├── main.py                 # FastAPI app entry point — registers all routers + snapshot endpoint
+│   ├── config.py               # Global state: satellites dict, debris dict, sim clock
+│   ├── api/
+│   │   ├── telemetry.py        # POST /api/telemetry — ingests objects into global state
+│   │   ├── simulate.py         # POST /api/simulate/step — runs full physics tick
+│   │   └── maneuver.py         # POST /api/maneuver/schedule + GET /api/maneuvers/active
+│   ├── orbit/
+│   │   └── propagator.py       # RK4 integrator + J2 perturbation — the physics core
+│   ├── collision/
+│   │   ├── conjunction.py      # KDTree query, severity classification (YELLOW/RED/CRITICAL)
+│   │   └── spatial_index.py    # sklearn KDTree wrapper (build_tree, query_collisions)
+│   ├── prediction/
+│   │   ├── predictor.py        # 3-stage conjunction pipeline, 24hr lookahead
+│   │   └── tca.py              # linear_tca (fast) + propagated_tca (accurate two-pass RK4)
+│   ├── maneuver/
+│   │   ├── planner.py          # plan_maneuver, execute_scheduled_burns, graveyard logic
+│   │   └── fuel_model.py       # Tsiolkovsky rocket equation, max_delta_v helper
+│   └── models/
+│       ├── satellite.py        # Satellite class — dynamic mass, cooldown, nominal slot
+│       └── debris.py           # Debris class — just r and v
+├── frontend/
+│   ├── index.html
+│   ├── vite.config.js          # proxies /api → localhost:8000
+│   ├── package.json
+│   └── src/
+│       ├── main.jsx            # React entry point
+│       ├── App.jsx             # Main layout, polling every 2s, step button
+│       ├── index.css           # Design tokens, CRT effects, VT323 font
+│       └── components/
+│           ├── Globe3D.jsx         # Three.js scene — Mouthwashing PS1 Earth + satellites + debris
+│           ├── BullseyePlot.jsx    # Canvas 2D polar chart — debris threats around selected sat
+│           ├── FuelGauges.jsx      # Per-satellite fuel bars + Recharts fleet chart
+│           └── ManeuverTimeline.jsx # Gantt chart — burn / cooldown / recovery blocks
+├── Dockerfile                  # ubuntu:22.04, exposes port 8000, required for grader
+├── requirements.txt            # fastapi uvicorn numpy scikit-learn
+├── stress_test.py              # 50 sats + 500 debris automated test suite
+└── README.md                   # Full docs with Mermaid flowcharts
+```
+
+---
+
+## How the Simulation Works
+
+### Global State (`config.py`)
+Everything lives in two plain Python dicts:
+```python
+satellites: Dict[str, Satellite]   # keyed by sat ID e.g. "SAT-001"
+debris:     Dict[str, Debris]      # keyed by debris ID e.g. "DEB-00042"
+```
+Plus a float `_sim_time` tracking elapsed simulation seconds. No database — pure in-memory. Resets on every server restart.
+
+### Per Tick (`api/simulate.py`)
+Every `POST /api/simulate/step` does this in order:
+1. Propagate all satellites (RK4 + J2)
+2. Propagate all debris (RK4 + J2)
+3. Advance sim clock
+4. Execute any scheduled recovery burns
+5. Run 3-stage conjunction predictor
+6. For each CRITICAL conjunction → plan evasion + schedule recovery
+7. Return summary
+
+### Orbital Propagation (`orbit/propagator.py`)
+- Uses RK4 (Runge-Kutta 4th order) with adaptive step sizing — max 30s steps regardless of tick size
+- Includes J2 perturbation (Earth's equatorial bulge) — required by spec, causes nodal regression
+- `propagate_orbit(r, v, total_dt)` is the main function used everywhere
+
+### Conjunction Detection
+Three stages to avoid O(N²):
+- **Stage 1:** KDTree over all debris positions, query 50km radius per satellite — eliminates 99%+ instantly
+- **Stage 2:** Linear TCA (constant velocity assumption) — fast filter, skips non-threatening trajectories
+- **Stage 3:** Propagated TCA — two-pass RK4 scan (60s coarse then 5s fine) over full 24hr horizon
+
+Collision threshold: **0.1 km (100 metres)**
+
+### Maneuver Planning (`maneuver/planner.py`)
+- Evasion direction computed in RTN frame — burns in transverse direction away from debris
+- Magnitude: 10 m/s evasion, 10 m/s recovery
+- Recovery burn scheduled 660s after evasion (600s cooldown + 60s buffer)
+- Fuel depleted using Tsiolkovsky with **current wet mass** (not initial — mass decreases each burn)
+- If fuel < 5% → graveyard burn instead of evasion
+
+### Satellite Model (`models/satellite.py`)
+Key properties:
+```python
+sat.mass          # @property — dry_mass + fuel (dynamic, decreases each burn)
+sat.fuel          # kg remaining (starts at 50.0)
+sat.dry_mass      # 500.0 kg (never changes)
+sat.last_burn_time     # sim time of last burn — used for 600s cooldown
+sat.scheduled_burns    # list of pending burn dicts
+sat.nominal_r/v        # ideal orbital slot — propagated alongside real position
+sat.status        # "NOMINAL" | "EVADING" | "EOL"
+```
+
+---
+
+## API Endpoints
+
+| Method | Endpoint | Purpose |
+|---|---|---|
+| POST | `/api/telemetry` | Ingest satellite + debris state vectors |
+| POST | `/api/simulate/step` | Advance physics by N seconds |
+| POST | `/api/maneuver/schedule` | Validate + schedule a burn sequence |
+| GET | `/api/visualization/snapshot` | Compressed lat/lon/fuel/status for frontend |
+| GET | `/api/maneuvers/active` | All pending burns across constellation |
+| GET | `/` | Health check |
+
+### Key Request Formats
+
+**Telemetry** — type must be `"SATELLITE"` or `"DEBRIS"` (case-insensitive):
+```json
+{
+  "timestamp": "2026-03-12T08:00:00.000Z",
+  "objects": [
+    { "id": "SAT-001", "type": "SATELLITE",
+      "r": {"x": 6778.0, "y": 0.0, "z": 0.0},
+      "v": {"x": 0.0, "y": 7.669, "z": 0.0} }
+  ]
+}
+```
+
+**Simulate step:**
+```json
+{ "step_seconds": 60 }
+```
+
+**Maneuver schedule** — delta_v in km/s, max magnitude 0.015 km/s (15 m/s):
+```json
+{
+  "satelliteId": "SAT-001",
+  "maneuver_sequence": [
+    { "burn_id": "BURN_1", "burnTime": "2026-03-12T14:00:00.000Z",
+      "deltaV_vector": {"x": 0.002, "y": 0.010, "z": -0.001} }
+  ]
+}
+```
+
+---
+
+## Frontend
+
+### Layout (App.jsx)
+3-column CSS grid:
+```
+[Left: Sat list + Event log] [Centre: 3D Globe] [Right: Bullseye plot]
+[Bottom-left: Fuel gauges  ] [Bottom centre+right: Maneuver timeline  ]
+```
+
+Polls `/api/visualization/snapshot` and `/api/maneuvers/active` every **2 seconds**.
+Step button posts `{ step_seconds: 60 }` to `/api/simulate/step`.
+
+### Globe (Globe3D.jsx)
+- Three.js WebGL renderer, `pixelRatio: 0.6` for chunky PS1 pixel look
+- Earth: `IcosahedronGeometry(1, 6)` + `flatShading: true` + NASA blue marble texture with `NearestFilter`
+- This combination samples the photo texture per-face and renders it flat = Mouthwashing polygon look
+- Debris: `InstancedMesh` of red tetrahedra — performant for thousands of objects
+- Satellites: low-poly box body + solar wings + dish, colour by status (green/amber/red)
+- Orbit trails: 10 fading dots behind each satellite
+- HTML overlays: CRT scanlines, vignette, terminal text boxes in corners
+- Camera: full spherical orbit via mouse drag, scroll to zoom
+
+### Design Language
+- Font: VT323 (headers) + Share Tech Mono (data) — loaded from Google Fonts
+- Colors: `--green: #00ff88`, `--amber: #ffaa00`, `--red: #ff3333`, `--bg: #040a0f`
+- CRT scanlines applied globally via `body::after` in `index.css`
+- All panels have a subtle top-edge green gradient line via `.panel::before`
+
+---
+
+## Physics Constants
+
+| Constant | Value |
+|---|---|
+| μ (Earth gravitational parameter) | 398600.4418 km³/s² |
+| R_E (Earth radius) | 6378.137 km |
+| J2 | 1.08263×10⁻³ |
+| Isp | 300 s |
+| g₀ | 9.80665 m/s² |
+| Dry mass | 500.0 kg |
+| Initial fuel | 50.0 kg |
+| Max Δv per burn | 15.0 m/s (0.015 km/s) |
+| Thruster cooldown | 600 s |
+| EOL fuel threshold | 5% (2.5 kg) |
+| Collision radius | 0.1 km (100 m) |
+| Station-keeping box | 10 km radius |
+| Signal latency | 10 s |
+
+---
+
+## Running Locally
+
+```bash
+# Backend (from project root — NOT from inside app/)
+pip install -r requirements.txt
+py -m uvicorn app.main:app --reload
+
+# Frontend (separate terminal)
+cd frontend
+npm install
+npm run dev
+# → http://localhost:3000
+```
+
+**Common mistake:** running uvicorn from inside `app/` causes `ModuleNotFoundError: No module named 'app'`. Always run from the project root.
+
+```bash
+# Docker
+docker build -t acm .
+docker run -p 8000:8000 acm
+
+# Stress test (backend must be running)
+py stress_test.py
+```
+
+---
+
+## Known Quirks
+
+- **State resets on restart** — all satellites and debris are in-memory only. Re-POST telemetry after every restart.
+- **Debris not propagated before first step** — debris positions are static until the first `/api/simulate/step` call.
+- **Trench line on globe** — the red zigzag line on the Earth is purely decorative, inspired by the Mouthwashing game reference image. It has no physics meaning.
+- **`physics/propagator.py`** — this file should be deleted. It's a dead Euler integrator with no J2. Everything should import from `orbit/propagator.py` only.
+- **Satellite trail direction** — trails approximate backward orbit by stepping west in longitude. Not physically accurate but visually correct for low-inclination orbits.
+- **TCA horizon** — predictor uses 86400s (24hr) lookahead as required by spec. On large constellations this can be slow if many debris pass Stage 2 filter.
+
+---
+
+## Evaluation Criteria (Hackathon)
+
+| Criteria | Weight |
+|---|---|
+| Safety Score (collisions avoided) | 25% |
+| Fuel Efficiency (total Δv used) | 20% |
+| Constellation Uptime (time in slot) | 15% |
+| Algorithmic Speed (API response time) | 15% |
+| UI/UX & Visualization | 15% |
+| Code Quality & Logging | 10% |
+
+Grader auto-tests via the REST API on port 8000. Docker is **mandatory** — submissions without a working Dockerfile are disqualified.
