@@ -1,10 +1,29 @@
+"""
+POST /api/simulate/step
+
+Advances the simulation by step_seconds.  Every tick:
+  1. Propagates real positions (RK4 + J2)
+  2. Propagates nominal slot positions WITH THE SAME propagator  ← Problem 7 fix
+  3. Advances the sim clock
+  4. Executes any scheduled burns
+  5. Runs the 3-stage conjunction predictor
+  6. For each CRITICAL conjunction → plan evasion + schedule recovery
+  7. Logs every event via the structured logger                   ← Problem 6 fix
+"""
+
 from fastapi import APIRouter
 from pydantic import BaseModel
 
-from app.config import satellites, debris, get_sim_time, advance_sim_time
-from app.orbit.propagator import propagate_orbit
-from app.collision.conjunction import detect_conjunctions
+from app.config import (
+    get_sim_time,
+    advance_sim_time,
+    satellites,
+    debris,
+)
+from app.logger import log_cdm, get_recent_events
 from app.maneuver.planner import plan_maneuver, execute_scheduled_burns
+from app.orbit.propagator import propagate_orbit
+from app.prediction.predictor import predict_conjunctions
 
 router = APIRouter()
 
@@ -13,84 +32,96 @@ class StepRequest(BaseModel):
     step_seconds: float
 
 
-@router.post("/api/simulate/step")
-def simulate_step(body: StepRequest):
-    """
-    Advance simulation by step_seconds.
+class StepResponse(BaseModel):
+    status: str
+    new_timestamp: float
+    collisions_detected: int
+    maneuvers_executed: int
+    conjunctions_active: int
 
-    Order of operations per tick:
-      1. Propagate all satellites (RK4 + J2)
-      2. Propagate all debris     (RK4 + J2)
-      3. Execute any scheduled recovery burns that are now due
-      4. Detect conjunctions (KDTree spatial index)
-      5. Plan evasion maneuvers for critical conjunctions
-      6. Update nominal slots for station-keeping tracking
-      7. Return step summary
-    """
-    step = body.step_seconds
-    current_time = get_sim_time()
 
-    # ── 1. Propagate satellites ───────────────────────────────────────────────
+@router.post("/api/simulate/step", response_model=StepResponse)
+def simulate_step(req: StepRequest) -> StepResponse:
+    dt = req.step_seconds
+
+    # ── 1. Propagate real positions ───────────────────────────────────────────
     for sat in satellites.values():
-        if sat.status == "EOL":
-            continue  # don't waste compute on dead satellites
+        sat.r, sat.v = propagate_orbit(sat.r, sat.v, dt)
 
-        r_new, v_new = propagate_orbit(sat.r, sat.v, total_dt=step)
-        sat.r = r_new
-        sat.v = v_new
-
-        # Also propagate nominal slot so station-keeping box moves with ideal orbit
-        r_nom, v_nom = propagate_orbit(sat.nominal_r, sat.nominal_v, total_dt=step)
-        sat.nominal_r = r_nom
-        sat.nominal_v = v_nom
-
-    # ── 2. Propagate debris ───────────────────────────────────────────────────
     for deb in debris.values():
-        r_new, v_new = propagate_orbit(deb.r, deb.v, total_dt=step)
-        deb.r = r_new
-        deb.v = v_new
+        deb.r, deb.v = propagate_orbit(deb.r, deb.v, dt)
+
+    # ── 2. Propagate nominal slots (Problem 7 fix) ────────────────────────────
+    # Uses sat.propagate_nominal() which calls the same orbit.propagator.
+    # Must happen AFTER real propagation so the slot tracks ideal orbit drift.
+    for sat in satellites.values():
+        sat.propagate_nominal(dt)
 
     # ── 3. Advance simulation clock ───────────────────────────────────────────
-    advance_sim_time(step)
-    new_time = get_sim_time()
+    advance_sim_time(dt)
+    sim_time = get_sim_time()
 
-    # ── 4. Execute any pending scheduled burns (e.g., recovery burns) ─────────
-    executed_burns = execute_scheduled_burns(new_time)
+    # ── 4. Execute scheduled burns ────────────────────────────────────────────
+    maneuvers_executed = execute_scheduled_burns(sim_time)
 
-    # ── 5. Detect conjunctions ────────────────────────────────────────────────
-    warnings = detect_conjunctions()
+    # ── 5 + 6. Conjunction prediction + logging (Problem 6 fix) ──────────────
+    conjunctions = predict_conjunctions(sim_time)
 
-    # ── 6. Plan evasion maneuvers for CRITICAL conjunctions ───────────────────
-    maneuvers = []
-    handled = set()
+    collisions_detected = 0
+    for conj in conjunctions:
+        sat_id      = conj["sat_id"]
+        debris_id   = conj["debris_id"]
+        tca         = conj.get("tca_sim_time", sim_time)
+        miss_km     = conj.get("miss_distance_km", 0.0)
+        severity    = conj.get("severity", "YELLOW")
 
-    for w in warnings:
-        if w["severity"] != "CRITICAL":
-            continue
+        # Log every conjunction event with full details
+        log_cdm(
+            sat_id=sat_id,
+            debris_id=debris_id,
+            tca_sim_time=tca,
+            predicted_miss_km=miss_km,
+            severity=severity,
+            sim_time_now=sim_time,
+        )
 
-        sat_id = w["satellite"]
-        if sat_id in handled:
-            continue
+        if severity == "CRITICAL":
+            collisions_detected += 1
+            # Autonomous evasion — planner handles fuel check, cooldown,
+            # RTN geometry, Tsiolkovsky depletion, and recovery scheduling.
+            # The planner itself calls log_maneuver_planned / log_recovery_scheduled.
+            plan_maneuver(sat_id, debris_id, conj, sim_time)
 
-        sat = satellites.get(sat_id)
-        if sat is None or sat.status == "EOL":
-            continue
+    return StepResponse(
+        status="STEP_COMPLETE",
+        new_timestamp=sim_time,
+        collisions_detected=collisions_detected,
+        maneuvers_executed=maneuvers_executed,
+        conjunctions_active=len(conjunctions),
+    )
 
-        maneuver = plan_maneuver(sat_id, w["debris"], new_time)
 
-        if maneuver:
-            maneuvers.append(maneuver)
-            handled.add(sat_id)
+@router.get("/api/events")
+def get_events(
+    limit: int = 100,
+    event_type: str = None,
+    sat_id: str = None,
+):
+    """
+    Return recent structured log events from the in-memory ring buffer.
+    Useful for the frontend event log panel and for debugging.
 
-    # ── 7. Build response ──────────────────────────────────────────────────────
+    Query params:
+        limit      - max events to return (default 100)
+        event_type - filter: CDM_DETECTED | MANEUVER_PLANNED |
+                             MANEUVER_EXECUTED | RECOVERY_SCHEDULED |
+                             RECOVERY_EXECUTED | EOL_TRIGGERED
+        sat_id     - filter by satellite ID
+    """
     return {
-        "status": "STEP_COMPLETE",
-        "new_timestamp": new_time,
-        "satellites_updated": sum(1 for s in satellites.values() if s.status != "EOL"),
-        "debris_propagated": len(debris),
-        "collisions_detected": sum(1 for w in warnings if w["severity"] == "CRITICAL"),
-        "warnings_total": len(warnings),
-        "maneuvers_executed": len(maneuvers) + len(executed_burns),
-        "maneuvers": maneuvers,
-        "scheduled_burns_executed": executed_burns,
+        "events": get_recent_events(
+            limit=limit,
+            event_type=event_type,
+            sat_id=sat_id,
+        )
     }
