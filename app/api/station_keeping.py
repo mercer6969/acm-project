@@ -7,7 +7,7 @@ from typing import Dict, List, Optional, Tuple
 from fastapi import APIRouter
 from pydantic import BaseModel
  
-from maneuver import (
+from app.api.maneuver import (
     Vec3, build_rtn_frame, plan_hohmann_transfer,
     plan_phasing_maneuver, _norm, _sub, EARTH_RADIUS_KM
 )
