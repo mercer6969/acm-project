@@ -42,8 +42,8 @@ def predict_conjunctions(horizon_s: float = PREDICTION_HORIZON_S) -> list[dict]:
     sat_ids = list(satellites.keys())
     debris_ids = list(debris.keys())
 
-    sat_positions = [satellites[sid].r.tolist() for sid in sat_ids]
-    debris_positions = [debris[did].r.tolist() for did in debris_ids]
+    sat_positions = [list(satellites[sid].r) for sid in sat_ids]
+    debris_positions = [list(debris[did].r) for did in debris_ids]
 
     # ── Stage 1: KDTree pre-filter ─────────────────────────────────────────
     tree = build_tree(debris_positions)

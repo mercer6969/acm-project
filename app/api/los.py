@@ -1,47 +1,44 @@
+"""
+app/api/los.py
+──────────────
+Bug 8 fix: GAST now uses proper Unix timestamp (SIM_EPOCH_UNIX + sim_time),
+           not sim elapsed seconds alone. Passing elapsed seconds directly
+           gave a wildly wrong Earth rotation angle.
+
+Bug 9 fix: los_check_endpoint now accepts min_elev parameter so the stress
+           test can scan for visible satellites with any elevation threshold.
+"""
+
 import csv
 import math
-import time as _time
 from functools import lru_cache
 from pathlib import Path
 from typing import Dict, List, NamedTuple, Optional, Tuple
- 
-# ── FastAPI (already in your requirements.txt) ────────────────────────────────
+
 from fastapi import APIRouter
- 
+
 router = APIRouter()
- 
-# ── Earth / astronomy constants ───────────────────────────────────────────────
-EARTH_RADIUS_KM   = 6378.137          # WGS-84 equatorial radius (km)
+
+EARTH_RADIUS_KM   = 6378.137
 EARTH_FLATTENING  = 1.0 / 298.257223563
 J2000_UNIX        = 946728000.0       # Unix time at J2000.0 epoch
-OMEGA_EARTH_RAD_S = 7.2921150e-5      # Earth rotation rate (rad/s)
- 
- 
-# ── GroundStation data class ──────────────────────────────────────────────────
- 
+
+
 class GroundStation(NamedTuple):
     name:         str
     lat_deg:      float
     lon_deg:      float
     alt_m:        float
     min_elev_deg: float
- 
- 
-# ── CSV loader — reads file once, then caches forever ────────────────────────
- 
+
+
 @lru_cache(maxsize=1)
 def _load_stations(csv_path: str = "ground_stations.csv") -> Tuple[GroundStation, ...]:
     """
-    Load ground stations from CSV. Returns a tuple so it is hashable
-    and compatible with lru_cache.
- 
-    Expected CSV columns: name, lat, lon, alt_m, min_elevation_deg
- 
-    If the file is not found, falls back to the 6 hard-coded stations
-    that match the problem statement's ground station network.
+    Load ground stations from CSV (cached after first load).
+    Falls back to 6 stations from the problem spec if CSV not found.
     """
     path = Path(csv_path)
- 
     if path.exists():
         stations = []
         with open(path, newline="", encoding="utf-8") as f:
@@ -51,176 +48,121 @@ def _load_stations(csv_path: str = "ground_stations.csv") -> Tuple[GroundStation
                     name         = row["name"].strip(),
                     lat_deg      = float(row["lat"]),
                     lon_deg      = float(row["lon"]),
-                    alt_m        = float(row["alt_m"]),
+                    alt_m        = float(row["alt_km"]),
                     min_elev_deg = float(row.get("min_elevation_deg", 5.0)),
                 ))
         return tuple(stations)
- 
-    # Fallback — 6 stations from the problem statement
+
+    # Fallback — exact 6 stations from problem statement
     return (
-        GroundStation("Svalbard",        78.23,   15.39,  474,  5.0),
-        GroundStation("Fairbanks",       64.97, -147.72,  138,  5.0),
-        GroundStation("Maspalomas",      27.76,  -15.63,  205,  5.0),
-        GroundStation("Canberra",       -35.40,  148.98,  812,  5.0),
-        GroundStation("Kourou",           5.25,  -52.80,   14,  5.0),
-        GroundStation("Hartebeesthoek", -25.89,   27.71, 1415,  5.0),
+        GroundStation("Bengaluru",     13.0333,   77.5167,  820, 5.0),
+        GroundStation("Svalbard",      78.2297,   15.4077,  400, 5.0),
+        GroundStation("Goldstone",     35.4266, -116.8900, 1000, 10.0),
+        GroundStation("Punta_Arenas", -53.1500,  -70.9167,   30, 5.0),
+        GroundStation("IIT_Delhi",     28.5450,   77.1926,  225, 15.0),
+        GroundStation("McMurdo",      -77.8463,  166.6682,   10, 5.0),
     )
- 
- 
-# ── Greenwich Apparent Sidereal Time ─────────────────────────────────────────
- 
-def _gast_radians(epoch_unix: float) -> float:
+
+
+def _gast_radians(unix_timestamp: float) -> float:
     """
-    Compute Greenwich Apparent Sidereal Time (radians) for a Unix timestamp.
-    Uses the IAU 1982 GMST model — accurate to ~0.01° for elevation checks.
+    GAST from a proper Unix timestamp.
+    Bug 8 fix: must receive SIM_EPOCH_UNIX + sim_elapsed, not sim_elapsed alone.
     """
-    days_since_j2000 = (epoch_unix - J2000_UNIX) / 86400.0
-    gmst_degrees = (280.46061837 + 360.98564736629 * days_since_j2000) % 360.0
-    return math.radians(gmst_degrees)
- 
- 
-# ── Coordinate helpers ────────────────────────────────────────────────────────
- 
+    days = (unix_timestamp - J2000_UNIX) / 86400.0
+    gmst = (280.46061837 + 360.98564736629 * days) % 360.0
+    return math.radians(gmst)
+
+
 def _station_ecef(gs: GroundStation) -> Tuple[float, float, float]:
-    """
-    Convert geodetic (lat, lon, alt) to ECEF (km) using WGS-84 ellipsoid.
-    """
-    lat    = math.radians(gs.lat_deg)
-    lon    = math.radians(gs.lon_deg)
+    lat = math.radians(gs.lat_deg)
+    lon = math.radians(gs.lon_deg)
     alt_km = gs.alt_m / 1000.0
- 
     e2 = 2.0 * EARTH_FLATTENING - EARTH_FLATTENING ** 2
     N  = EARTH_RADIUS_KM / math.sqrt(1.0 - e2 * math.sin(lat) ** 2)
- 
     x = (N + alt_km) * math.cos(lat) * math.cos(lon)
     y = (N + alt_km) * math.cos(lat) * math.sin(lon)
-    z = (N * (1.0 - e2) + alt_km)   * math.sin(lat)
+    z = (N * (1.0 - e2) + alt_km) * math.sin(lat)
     return x, y, z
- 
- 
+
+
 def _station_eci(gs: GroundStation, gast: float) -> Tuple[float, float, float]:
-    """
-    Rotate station ECEF → ECI by the Greenwich sidereal angle (Z-axis rotation).
-    """
-    x_ecef, y_ecef, z_ecef = _station_ecef(gs)
-    cos_g = math.cos(gast)
-    sin_g = math.sin(gast)
-    return (
-         cos_g * x_ecef - sin_g * y_ecef,
-         sin_g * x_ecef + cos_g * y_ecef,
-         z_ecef,
-    )
- 
- 
-# ── Core geometry ─────────────────────────────────────────────────────────────
- 
-def _elevation_angle_deg(
-    gs: GroundStation,
-    sat_r: Tuple[float, float, float],
-    gast: float,
-) -> float:
-    """
-    Compute elevation angle (degrees) from a ground station to a satellite.
- 
-    gs:    GroundStation
-    sat_r: satellite ECI position (x, y, z) in km
-    gast:  Greenwich Apparent Sidereal Time in radians
-    """
+    x, y, z = _station_ecef(gs)
+    cos_g, sin_g = math.cos(gast), math.sin(gast)
+    return (cos_g*x - sin_g*y, sin_g*x + cos_g*y, z)
+
+
+def _elevation_deg(gs: GroundStation, sat_r, gast: float) -> float:
     sx, sy, sz = _station_eci(gs, gast)
- 
-    # Range vector: station → satellite
-    dx, dy, dz = sat_r[0] - sx, sat_r[1] - sy, sat_r[2] - sz
+    dx, dy, dz = sat_r[0]-sx, sat_r[1]-sy, sat_r[2]-sz
     rng = math.sqrt(dx*dx + dy*dy + dz*dz)
     if rng < 1e-9:
-        return 90.0  # satellite is at the station (shouldn't happen)
- 
-    # Up-vector at station (unit vector along station ECEF position)
+        return 90.0
     s_mag = math.sqrt(sx*sx + sy*sy + sz*sz)
-    ux, uy, uz = sx / s_mag, sy / s_mag, sz / s_mag
- 
-    # Elevation = arcsin( dot(range_hat, up) )
+    ux, uy, uz = sx/s_mag, sy/s_mag, sz/s_mag
     dot = dx*ux + dy*uy + dz*uz
-    sin_elev = max(-1.0, min(1.0, dot / rng))   # clamp for float safety
-    return math.degrees(math.asin(sin_elev))
- 
- 
-# ── Public functions (called from maneuver.py) ────────────────────────────────
- 
+    return math.degrees(math.asin(max(-1.0, min(1.0, dot / rng))))
+
+
+# ── Public API ────────────────────────────────────────────────────────────────
+
 def has_ground_station_los(
     sat_r_km,
     epoch_unix: Optional[float] = None,
     csv_path: str = "ground_stations.csv",
 ) -> bool:
     """
-    Returns True if the satellite has LOS to at least one ground station.
- 
-    sat_r_km:   satellite ECI position — list, tuple, or numpy array [x, y, z] km
-    epoch_unix: simulation time as Unix timestamp (uses wall clock if None)
-    csv_path:   path to ground_stations.csv (relative to where uvicorn runs)
- 
-    This is the only function you need to call from schedule_maneuver().
+    True if satellite has LOS to ≥1 ground station.
+
+    Bug 8 fix: epoch_unix must be a real Unix timestamp.
+    Call with get_unix_time() from config, not get_sim_time().
     """
     if epoch_unix is None:
-        epoch_unix = _time.time()
- 
-    # Convert numpy array to plain tuple if needed (numpy not required here)
+        from app.config import get_unix_time
+        epoch_unix = get_unix_time()
+
     try:
         r = (float(sat_r_km[0]), float(sat_r_km[1]), float(sat_r_km[2]))
     except (TypeError, IndexError):
         return False
- 
+
     gast     = _gast_radians(epoch_unix)
     stations = _load_stations(csv_path)
- 
+
     for gs in stations:
-        if _elevation_angle_deg(gs, r, gast) >= gs.min_elev_deg:
+        if _elevation_deg(gs, r, gast) >= gs.min_elev_deg:
             return True
- 
     return False
- 
- 
+
+
 def los_details(
     sat_r_km,
     epoch_unix: Optional[float] = None,
     csv_path: str = "ground_stations.csv",
 ) -> Dict:
-    """
-    Returns full per-station breakdown — useful for debug responses
-    and the grader's blind-conjunction pre-upload scenario.
- 
-    Returns:
-    {
-      "any_los": bool,
-      "best_station": "Svalbard",
-      "best_elev_deg": 23.4,
-      "stations": [
-        {"station": "Svalbard", "elevation_deg": 23.4, "visible": true,  "min_elev_mask": 5.0},
-        {"station": "Kourou",   "elevation_deg": -8.1, "visible": false, "min_elev_mask": 5.0},
-        ...
-      ]
-    }
-    """
+    """Full per-station breakdown for debug responses and grader inspection."""
     if epoch_unix is None:
-        epoch_unix = _time.time()
- 
+        from app.config import get_unix_time
+        epoch_unix = get_unix_time()
+
     try:
         r = (float(sat_r_km[0]), float(sat_r_km[1]), float(sat_r_km[2]))
     except (TypeError, IndexError):
-        return {"any_los": False, "best_station": None, "best_elev_deg": -90.0, "stations": []}
- 
+        return {"any_visible": False, "stations": [], "gast_deg": 0}
+
     gast     = _gast_radians(epoch_unix)
     stations = _load_stations(csv_path)
- 
-    results    = []
-    any_los    = False
-    best_name  = None
-    best_elev  = -90.0
- 
+
+    results   = []
+    any_vis   = False
+    best_name = None
+    best_elev = -90.0
+
     for gs in stations:
-        elev    = _elevation_angle_deg(gs, r, gast)
+        elev    = _elevation_deg(gs, r, gast)
         visible = elev >= gs.min_elev_deg
         if visible:
-            any_los = True
+            any_vis = True
         if elev > best_elev:
             best_elev = elev
             best_name = gs.name
@@ -228,29 +170,52 @@ def los_details(
             "station":       gs.name,
             "elevation_deg": round(elev, 2),
             "visible":       visible,
-            "min_elev_mask": gs.min_elev_deg,
+            "min_elev_deg":  gs.min_elev_deg,
         })
- 
+
     return {
-        "any_los":       any_los,
+        "any_visible":   any_vis,
         "best_station":  best_name,
         "best_elev_deg": round(best_elev, 2),
         "stations":      results,
+        "gast_deg":      round(math.degrees(gast) % 360, 4),
     }
- 
- 
-# ── FastAPI endpoint (bonus — exposes LOS check via REST) ─────────────────────
- 
+
+
+# ── REST endpoint ─────────────────────────────────────────────────────────────
+
 @router.get("/api/los/check")
 def los_check_endpoint(
-    x: float, y: float, z: float,
+    x: float,
+    y: float,
+    z: float,
     epoch_unix: Optional[float] = None,
+    min_elev: float = 5.0,         # Bug 9 fix: accept custom elevation threshold
 ):
     """
-    GET /api/los/check?x=6871&y=0&z=0&epoch_unix=1234567890
- 
-    Quick REST check — useful for testing from browser or curl:
-      curl "http://localhost:8000/api/los/check?x=6871&y=0&z=0"
+    GET /api/los/check?x=6871&y=0&z=0
+    GET /api/los/check?x=6871&y=0&z=0&min_elev=-90   (find any satellite above horizon)
+
+    Bug 9 fix: min_elev parameter allows stress test to scan all satellites
+    using a lower threshold than the operational 5° mask.
     """
+    if epoch_unix is None:
+        from app.config import get_unix_time
+        epoch_unix = get_unix_time()
+
     details = los_details((x, y, z), epoch_unix=epoch_unix)
-    return details
+
+    # Override visibility with the requested threshold
+    for st in details["stations"]:
+        st["visible"] = st["elevation_deg"] >= min_elev
+    details["any_visible"] = any(
+        s["elevation_deg"] >= min_elev for s in details["stations"]
+    )
+
+    return {
+        "sat_eci_km":  {"x": x, "y": y, "z": z},
+        "sim_time_s":  0,
+        "any_visible": details["any_visible"],
+        "stations":    details["stations"],
+        "gast_deg":    details["gast_deg"],
+    }

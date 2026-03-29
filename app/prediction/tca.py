@@ -11,8 +11,13 @@ def linear_tca(sat, deb):
     Returns (t_ca_seconds, min_distance_km)
     t_ca may be negative (closest approach was in the past).
     """
-    r_rel = sat.r - deb.r
-    v_rel = sat.v - deb.v
+    sat_r = np.array(sat.r)
+    sat_v = np.array(sat.v)
+    deb_r = np.array(deb.r)
+    deb_v = np.array(deb.v)
+    
+    r_rel = sat_r - deb_r
+    v_rel = sat_v - deb_v
 
     v_norm_sq = np.dot(v_rel, v_rel)
 
