@@ -621,3 +621,36 @@ Follow-up
 Add GZipMiddleware to FastAPI for a further ~70% compression with one line
 since param stubbed in for future delta-mode support
 
+═══════════════════════════════════════════════════════════════
+ACM PROJECT — BACKEND CHAIN UPDATE-5-(shreyansh)
+Autonomous Collision Management System
+═══════════════════════════════════════════════════════════════
+
+ALL 8 STRESS TESTS NOW PASSING
+
+BUGS FIXED THIS SESSION
+─────────────────────────────────────────────────────────────
+1. los.py — GAST epoch anchor fixed (sim_time_s vs epoch_unix conflict)
+2. los.py — alt_m → alt_km CSV column mismatch fixed
+3. los.py — los_details() kwarg mismatch fixed (sim_time_s → epoch_unix)
+4. los_check_endpoint — added min_elev parameter for stress test scanning
+5. conjunction.py — .tolist() on list objects fixed → list()
+6. predictor.py — .tolist() on list objects fixed → list()
+7. tca.py — list subtraction fixed → numpy arrays at function entry
+8. simulate.py — maneuvers_executed counter fixed (was always 0)
+9. simulate.py — predict_conjunctions() called with correct args
+10. stress_test.py — _find_visible_satellite() bug fixed (r[0] → sx,sy,sz)
+11. stress_test.py — maneuver test moved before simulate steps
+12. main.py — health check response fixed ("ACM Running" exact string)
+13. station_keeping.py — removed unused fuel_model import
+
+STRESS TEST RESULTS
+─────────────────────────────────────────────────────────────
+✅ Health check
+✅ Telemetry ingestion — 550 objects in ~14ms
+✅ Maneuver schedule — valid/overlimit/unknown/blind all correct
+✅ Simulate x10 — 0 collisions, 12 maneuvers, <200ms/step
+✅ Snapshot — 15ms avg, EXCELLENT
+✅ Active maneuvers — 10 burns queued
+✅ Fuel depletion — all sats above 45kg
+✅ Event log — 52 events (CDM/planned/executed/recovery)
