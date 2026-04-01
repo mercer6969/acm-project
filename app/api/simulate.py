@@ -1,15 +1,10 @@
 """
 app/api/simulate.py
-───────────────────
-Bug fixes in this version:
-  Bug 2: predict_conjunctions() called without args
-  Bug 3: conjunction dict keys fixed
-  Bug 4: plan_maneuver called with 3 args not 4
-  Bug 5: maneuvers_executed counter includes both executed + planned
 """
 
 from fastapi import APIRouter
 from pydantic import BaseModel
+from typing import Optional
 
 from app.config import advance_sim_time, debris, get_sim_time, satellites
 from app.logger import get_recent_events, log_cdm
@@ -19,17 +14,28 @@ from app.prediction.predictor import predict_conjunctions
 
 router = APIRouter()
 
+INITIAL_FUEL_KG = 50.0
+
 
 class StepRequest(BaseModel):
     step_seconds: float
 
 
+class FleetMetrics(BaseModel):
+    uptime_pct:         float
+    total_fuel_used_kg: float
+    optimization_ratio: float
+    sats_in_slot:       int
+    sats_total:         int
+
+
 class StepResponse(BaseModel):
-    status: str
-    new_timestamp: float
+    status:              str
+    new_timestamp:       float
     collisions_detected: int
-    maneuvers_executed: int
+    maneuvers_executed:  int
     conjunctions_active: int
+    fleet_metrics:       Optional[FleetMetrics] = None
 
 
 @router.post("/api/simulate/step", response_model=StepResponse)
@@ -43,7 +49,7 @@ def simulate_step(req: StepRequest) -> StepResponse:
     for deb in debris.values():
         deb.r, deb.v = propagate_orbit(deb.r, deb.v, dt)
 
-    # 2. Propagate nominal slots with same RK4+J2 (Problem 7 fix)
+    # 2. Propagate nominal slots with same RK4+J2
     for sat in satellites.values():
         sat.propagate_nominal(dt)
 
@@ -51,13 +57,15 @@ def simulate_step(req: StepRequest) -> StepResponse:
     advance_sim_time(dt)
     sim_time = get_sim_time()
 
-    # 4. Execute scheduled burns that are now due
+    # 4. Execute scheduled burns due this tick
     maneuvers_executed_list = execute_scheduled_burns(sim_time)
     maneuvers_planned_count = 0
 
     # 5+6. Conjunction prediction + autonomous evasion
     conjunctions = predict_conjunctions()
-
+    print(f"DEBUG: conjunctions count = {len(conjunctions)}")
+    for c in conjunctions:
+        print(f"  {c['satellite']} → {c['debris']} severity={c['severity']} dist={c['distance_km']} km")
     collisions_detected = 0
     for conj in conjunctions:
         sat_id    = conj["satellite"]
@@ -81,8 +89,17 @@ def simulate_step(req: StepRequest) -> StepResponse:
             if result:
                 maneuvers_planned_count += 1
 
-    # Bug 5 fix: total = burns executed this tick + new evasions planned
     total_maneuvers = len(maneuvers_executed_list) + maneuvers_planned_count
+
+    # 7. Fleet-wide multi-objective metrics (uptime vs fuel tradeoff)
+    n_total    = max(1, len(satellites))
+    n_in_slot  = sum(1 for s in satellites.values() if s.in_station_keeping_box())
+    fuel_used  = sum(
+        max(0.0, INITIAL_FUEL_KG - s.fuel) for s in satellites.values()
+    )
+    uptime_pct = round((n_in_slot / n_total) * 100, 1)
+    # Higher ratio = more uptime per kg of fuel spent (avoid div/0)
+    opt_ratio  = round(uptime_pct / max(0.01, fuel_used), 2)
 
     return StepResponse(
         status="STEP_COMPLETE",
@@ -90,6 +107,13 @@ def simulate_step(req: StepRequest) -> StepResponse:
         collisions_detected=collisions_detected,
         maneuvers_executed=total_maneuvers,
         conjunctions_active=len(conjunctions),
+        fleet_metrics=FleetMetrics(
+            uptime_pct=uptime_pct,
+            total_fuel_used_kg=round(fuel_used, 3),
+            optimization_ratio=opt_ratio,
+            sats_in_slot=n_in_slot,
+            sats_total=n_total,
+        ),
     )
 
 

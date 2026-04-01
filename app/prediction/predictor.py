@@ -1,41 +1,24 @@
+"""
+app/prediction/predictor.py
+────────────────────────────
+Bug fixes in this version:
+  – Stage 0: immediate collision check for debris already inside 100 m.
+  – Fixed ambiguous truth value error with NumPy arrays.
+  – Added debug prints to verify detection.
+"""
+
 import numpy as np
-from app.config import satellites, debris
+from app.config import debris, satellites
 from app.collision.spatial_index import build_tree, query_collisions
 from app.prediction.tca import linear_tca, propagated_tca
 
-# Collision threshold per spec
-COLLISION_RADIUS_KM = 0.1       # 100 metres
-
-# Pre-filter radius for KDTree — only run expensive propagation on debris
-# that is already within this range at current time OR moving toward satellite.
-# Set conservatively large to avoid missing fast-moving debris.
-PREFILTER_RADIUS_KM = 50.0      # km
-
-# 24-hour lookahead required by spec
-PREDICTION_HORIZON_S = 86400.0  # seconds
+COLLISION_RADIUS_KM = 0.1        # 100 metres
+PREFILTER_RADIUS_KM = 50.0       # km
+LINEAR_SAFE_KM = 2.0
+PREDICTION_HORIZON_S = 86400.0
 
 
-def predict_conjunctions(horizon_s: float = PREDICTION_HORIZON_S) -> list[dict]:
-    """
-    Predict all conjunctions within the next horizon_s seconds.
-
-    Two-stage approach to avoid O(N²) propagation:
-
-    Stage 1 — KDTree spatial pre-filter (cheap):
-        Filter debris to only those currently within PREFILTER_RADIUS_KM
-        of any satellite. Eliminates >99% of debris immediately.
-
-    Stage 2 — Linear TCA filter (fast):
-        For remaining candidates, compute linear TCA. Skip if the closest
-        linear approach is still safe (> 5× collision radius). This catches
-        debris on crossing trajectories without full propagation.
-
-    Stage 3 — Propagated TCA (accurate, expensive, but rare):
-        For the small set of genuine threat candidates, run the full
-        two-pass RK4+J2 propagated TCA over the prediction horizon.
-
-    Returns list of warning dicts sorted by time to closest approach.
-    """
+def predict_conjunctions(horizon_s: float = PREDICTION_HORIZON_S) -> list:
     if not satellites or not debris:
         return []
 
@@ -45,52 +28,74 @@ def predict_conjunctions(horizon_s: float = PREDICTION_HORIZON_S) -> list[dict]:
     sat_positions = [list(satellites[sid].r) for sid in sat_ids]
     debris_positions = [list(debris[did].r) for did in debris_ids]
 
-    # ── Stage 1: KDTree pre-filter ─────────────────────────────────────────
+    # Stage 1: KDTree pre‑filter
     tree = build_tree(debris_positions)
     nearby_results = query_collisions(tree, sat_positions, PREFILTER_RADIUS_KM)
 
     warnings = []
 
     for i, nearby_indices in enumerate(nearby_results):
+        # Check if the array is empty (works for both list and numpy array)
         if len(nearby_indices) == 0:
             continue
 
         sat = satellites[sat_ids[i]]
+        sat_r = np.array(sat.r, dtype=float)
+        sat_v = np.array(sat.v, dtype=float)
 
         for j in nearby_indices:
-            deb = debris[debris_ids[j]]
+            # Ensure j is integer index (numpy arrays may return scalar)
+            j_idx = int(j)
+            deb = debris[debris_ids[j_idx]]
+            deb_r = np.array(deb.r, dtype=float)
+            deb_v = np.array(deb.v, dtype=float)
 
-            # ── Stage 2: Linear TCA (fast sanity check) ────────────────────
-            t_lin, d_lin = linear_tca(sat, deb)
-
-            # If linear TCA is in the past or distance is very safe, skip
-            if t_lin < 0 or d_lin > (COLLISION_RADIUS_KM * 5):
+            # Stage 0: immediate collision check
+            cur_dist = float(np.linalg.norm(sat_r - deb_r))
+            if cur_dist < COLLISION_RADIUS_KM:
+                warnings.append({
+                    "satellite":    sat.id,
+                    "debris":       deb.id,
+                    "t_ca_seconds": 0.0,
+                    "distance_km":  round(cur_dist, 6),
+                    "severity":     "CRITICAL",
+                })
+                # No further processing for this debris
                 continue
 
-            # ── Stage 3: Propagated TCA (accurate) ────────────────────────
+            # Stage 2: linear TCA filter
+            t_lin, d_lin = linear_tca(sat, deb)
+            if d_lin > LINEAR_SAFE_KM:
+                continue
+
+            # Stage 3: propagated TCA
             t_ca, min_dist = propagated_tca(
-                sat.r.copy(), sat.v.copy(),
-                deb.r.copy(), deb.v.copy(),
-                horizon_s=horizon_s,
+                sat_r, sat_v, deb_r, deb_v, horizon_s=horizon_s
             )
 
             if min_dist >= COLLISION_RADIUS_KM:
                 continue
 
-            # Determine severity
             if min_dist < COLLISION_RADIUS_KM:
                 severity = "CRITICAL"
+            elif min_dist < 1.0:
+                severity = "RED"
             else:
-                severity = "WARNING"
+                severity = "YELLOW"
 
             warnings.append({
-                "satellite": sat.id,
-                "debris": deb.id,
+                "satellite":    sat.id,
+                "debris":       deb.id,
                 "t_ca_seconds": round(t_ca, 1),
-                "distance_km": round(min_dist, 5),
-                "severity": severity,
+                "distance_km":  round(min_dist, 6),
+                "severity":     severity,
             })
 
-    # Sort by time to closest approach so the most imminent threat is first
+    # Optional debug print – will appear in the backend console
+    if warnings:
+        print(f"[DEBUG] predict_conjunctions found {len(warnings)} warnings")
+        for w in warnings[:5]:  # show first 5
+            print(f"  {w['satellite']} → {w['debris']} dist={w['distance_km']}km severity={w['severity']}")
+
     warnings.sort(key=lambda w: w["t_ca_seconds"])
     return warnings

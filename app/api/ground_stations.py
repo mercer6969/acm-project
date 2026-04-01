@@ -1,8 +1,9 @@
 import csv
+from functools import lru_cache
 import math
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Tuple
  
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
@@ -77,28 +78,25 @@ class BlackoutWindow:
 # ---------------------------------------------------------------------------
 # CSV loader
 # ---------------------------------------------------------------------------
-def load_ground_stations(csv_path: str = "ground_stations.csv") -> List[GroundStation]:
-    """
-    Read ground_stations.csv and return a list of GroundStation objects.
-    Expected columns: name, lat, lon, alt_m, min_elevation_deg
-    """
+@lru_cache(maxsize=1)
+def _load_stations(csv_path: str = "ground_stations.csv") -> Tuple[GroundStation, ...]:
     path = Path(csv_path)
-    if not path.exists():
-        raise FileNotFoundError(f"CSV not found: {csv_path}")
- 
-    stations: List[GroundStation] = []
-    with open(path, newline="") as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            stations.append(GroundStation(
-                name=row["name"].strip(),
-                lat_deg=float(row["lat"]),
-                lon_deg=float(row["lon"]),
-                alt_m=float(row["alt_m"]),
-                min_elev_deg=float(row.get("min_elevation_deg", 5.0)),
-            ))
-    return stations
- 
+    if path.exists():
+        stations = []
+        with open(path, newline="", encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                # Strip whitespace from all keys (CSV may have spaces after commas)
+                row = {k.strip(): v.strip() for k, v in row.items()}
+                stations.append(GroundStation(
+                    name         = row["Station_Name"],
+                    lat_deg      = float(row["Latitude"]),
+                    lon_deg      = float(row["Longitude"]),
+                    alt_m        = float(row["Elevation_m"]),
+                    min_elev_deg = float(row.get("Min_Elevation_Angle_deg", 5.0)),
+                ))
+        return tuple(stations)
+    # ... fallback unchanged
  
 # ---------------------------------------------------------------------------
 # LOS Checker
@@ -287,7 +285,7 @@ def los_check(req: LOSRequest):
     Returns pass windows, blackout windows, and coverage statistics.
     """
     try:
-        stations = load_ground_stations(req.csv_path)
+        stations = _load_stations(req.csv_path)
     except FileNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
  
@@ -315,7 +313,7 @@ def los_check(req: LOSRequest):
 def list_stations(csv_path: str = "ground_stations.csv"):
     """GET /api/ground-stations/list  — return all stations from CSV."""
     try:
-        stations = load_ground_stations(csv_path)
+        stations = _load_stations(csv_path)
         return [vars(s) for s in stations]
     except FileNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))

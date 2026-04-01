@@ -144,12 +144,19 @@ def _schedule_recovery_when_clear(sat_id, debris_id,
 
     recovery_burn_id = f"RECOVERY_{sat_id}_{int(current_time)}"
     execute_at       = current_time + THRUSTER_COOLDOWN + 60.0
-    recovery_dv      = -dv_evasion_eci * (RECOVERY_DV_KMS / EVASION_DV_KMS)
+
+    # Prefer a slot-targeted correction over a blind reverse burn
+    slot_dv = _compute_slot_correction(sat)
+    if slot_dv is not None:
+        recovery_dv = slot_dv
+    else:
+        # Satellite is already near its slot — use small reverse burn as fallback
+        recovery_dv = -dv_evasion_eci * (RECOVERY_DV_KMS / EVASION_DV_KMS)
 
     sat.scheduled_burns.append({
         "burn_id":          recovery_burn_id,
         "execute_at":       execute_at,
-        "delta_v":          recovery_dv,      # numpy array — _arr() in execute
+        "delta_v":          recovery_dv,
         "type":             "RECOVERY",
         "threat_debris_id": debris_id,
         "min_clear_time":   execute_at,
@@ -168,10 +175,9 @@ def _schedule_recovery_when_clear(sat_id, debris_id,
         sat_id=sat_id, burn_id=recovery_burn_id,
         burn_sim_time=execute_at, delta_v_kms=dv_dict,
         fuel_before_kg=sat.fuel,
-        fuel_after_kg=sat.fuel - fuel_consumed(sat.mass, RECOVERY_DV_KMS),
+        fuel_after_kg=sat.fuel - fuel_consumed(sat.mass, float(np.linalg.norm(recovery_dv))),
         maneuver_type="RECOVERY",
     )
-
 
 # ── Main planner ──────────────────────────────────────────────────────────────
 
