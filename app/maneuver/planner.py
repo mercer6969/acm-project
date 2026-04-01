@@ -120,6 +120,20 @@ def _threat_still_active(sat_id, debris_id):
     closest = float(np.linalg.norm(rel_r + rel_v * t_ca))
     return closest < SAFE_DISTANCE_KM
 
+def _compute_slot_correction(sat):
+    """
+    Compute delta-v needed to return satellite toward nominal slot.
+    Uses relative position in ECI to determine correction direction.
+    Caps at 5 m/s (0.005 km/s) and skips if already in box.
+    """
+    slot_offset = _arr(sat.nominal_r) - _arr(sat.r)
+    dist = float(np.linalg.norm(slot_offset))
+    if dist < 0.1:          # already within 100m of slot — no burn needed
+        return None
+    # Scale magnitude with distance, max 0.005 km/s (5 m/s)
+    dv_mag = min(0.005, dist * 0.0001)
+    dv_dir = slot_offset / dist
+    return dv_dir * dv_mag
 
 def _schedule_recovery_when_clear(sat_id, debris_id,
                                   dv_evasion_eci, current_time,
