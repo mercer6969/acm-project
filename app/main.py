@@ -20,7 +20,7 @@ from app.api.maneuver         import router as maneuver_router
 from app.api.simulate         import router as simulate_router
 from app.api.station_keeping  import router as sk_router
 from app.api.telemetry        import router as telemetry_router
-
+from app.api import visualization
 app = FastAPI(
     title="Autonomous Constellation Manager",
     description="ACM — telemetry ingestion, conjunction prediction, autonomous maneuver planning",
@@ -134,3 +134,6 @@ else:
     @app.get("/health")
     def root():
         return {"status": "ACM Running"}
+
+
+app.include_router(visualization.router)

@@ -8,10 +8,19 @@ const API = ''  // proxied via vite → localhost:8000
 const POLL_MS = 2000
 
 // Snapshot filter config — tune to trade visibility vs bandwidth
-// band:         'leo' | 'meo' | 'geo' | 'all'
-// proximity_km: only show debris within this distance of any satellite (0 = off)
 const SNAP_BAND         = 'leo'
 const SNAP_PROXIMITY_KM = 500
+
+// Helper: convert Unix timestamp to Greenwich Sidereal Time (radians)
+function unixToGast(unixSeconds) {
+  // J2000.0 = 946728000 seconds Unix
+  const J2000 = 946728000.0
+  const days = (unixSeconds - J2000) / 86400.0
+  // GMST in degrees
+  let gmst = 280.46061837 + 360.98564736629 * days
+  gmst = ((gmst % 360) + 360) % 360
+  return gmst * Math.PI / 180
+}
 
 export default function App() {
   const [snapshot, setSnapshot]       = useState(null)
@@ -21,6 +30,8 @@ export default function App() {
   const [simTime, setSimTime]         = useState(0)
   const [connected, setConnected]     = useState(false)
   const [stepLog, setStepLog]         = useState([])
+  const [earthRotationY, setEarthRotationY] = useState(0)
+  const [rotateEnabled, setRotateEnabled] = useState(true)  // NEW: play/pause
   const pollRef = useRef(null)
 
   const [snapMeta, setSnapMeta] = useState({ total: 0, shown: 0 })
@@ -28,10 +39,8 @@ export default function App() {
   // ── Poll snapshot + active maneuvers ──────────────────────────────────────
   const fetchSnapshot = useCallback(async () => {
     try {
-      // Build snapshot URL with payload-size filters
       const snapUrl = `${API}/api/visualization/snapshot?band=${SNAP_BAND}&proximity_km=${SNAP_PROXIMITY_KM}`
 
-      // Fetch snapshot and active maneuvers in parallel
       const [snapRes, manRes] = await Promise.all([
         fetch(snapUrl),
         fetch(`${API}/api/maneuvers/active`),
@@ -48,13 +57,22 @@ export default function App() {
         shown: snapData.debris_shown ?? snapData.debris_cloud?.length ?? 0,
       })
 
-      // Update maneuvers from active endpoint
+      // Update Earth rotation based on simulation timestamp (snap to correct orientation)
+      if (snapData.unix_timestamp) {
+        const gast = unixToGast(snapData.unix_timestamp)
+        setEarthRotationY(gast)
+      } else if (snapData.sim_time_s !== undefined) {
+        // Fallback: assume start epoch J2000
+        const unixEstimate = 946728000 + snapData.sim_time_s
+        const gast = unixToGast(unixEstimate)
+        setEarthRotationY(gast)
+      }
+
       if (manRes.ok) {
         const manData = await manRes.json()
         setManeuvers(manData.maneuvers ?? [])
       }
 
-      // Auto-select first sat if none selected
       if (!selectedSat && snapData.satellites?.length > 0) {
         setSelectedSat(snapData.satellites[0])
       }
@@ -85,12 +103,10 @@ export default function App() {
         maneuvers: data.maneuvers_executed,
       }, ...prev].slice(0, 8))
 
-      // Store warnings from step so BullseyePlot and sat badges update
       if (data.warnings != null) {
         setWarnings(data.warnings)
       }
 
-      // Merge step maneuvers into state (avoid duplicates by burn_id)
       if (data.maneuvers?.length > 0) {
         setManeuvers(prev => {
           const existing = new Set(prev.map(m => m.burn_id))
@@ -99,7 +115,7 @@ export default function App() {
         })
       }
 
-      fetchSnapshot()
+      fetchSnapshot()  // this will recalc earthRotationY based on new sim time
     } catch (e) {
       console.error('Step failed', e)
     }
@@ -156,6 +172,25 @@ export default function App() {
             &nbsp;|&nbsp;
             T+<span style={{ color: '#ffaa00' }}>{Math.floor(simTime / 60)}m</span>
           </div>
+
+          {/* NEW: Rotation toggle button */}
+          <button
+            onClick={() => setRotateEnabled(v => !v)}
+            style={{
+              fontFamily: 'VT323', fontSize: '1rem',
+              background: 'transparent',
+              border: `1px solid ${rotateEnabled ? '#00ff88' : '#ffaa00'}`,
+              color: rotateEnabled ? '#00ff88' : '#ffaa00',
+              padding: '2px 14px',
+              cursor: 'pointer',
+              letterSpacing: '0.1em',
+              transition: 'all 0.15s',
+            }}
+            onMouseEnter={e => e.target.style.background = rotateEnabled ? 'rgba(0,255,136,0.1)' : 'rgba(255,170,0,0.1)'}
+            onMouseLeave={e => e.target.style.background = 'transparent'}
+          >
+            {rotateEnabled ? '⏸ ROTATION' : '▶ ROTATION'}
+          </button>
 
           <button
             onClick={stepSim}
@@ -256,7 +291,8 @@ export default function App() {
           satellites={sats}
           debrisCloud={debrisCloud}
           selectedSat={selectedSat}
-          onSelectSat={setSelectedSat}
+          earthRotationY={earthRotationY}
+          rotateEnabled={rotateEnabled}
         />
         <div style={{
           position: 'absolute', top: 8, left: 8,
