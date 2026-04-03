@@ -349,4 +349,4 @@ acm-project/
 
 ## Team Solis
 
-Built for the **National Space Hackathon 2026 — Project AETHER**.
+Built for the **National Space Hackathon 2026 — Project Solis-1**.
