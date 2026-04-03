@@ -18,6 +18,10 @@
 The ACM is a ground-based autonomous system acting as the "brain" for a fleet of 50+ active satellites navigating a hazardous debris field in LEO. It continuously ingests orbital telemetry, predicts conjunctions up to 24 hours ahead, and autonomously plans and executes collision avoidance maneuvers — all without human intervention.
 
 ---
+## 📄 Documentation
+ [📘 View Full Documentation](https://docs.google.com/document/d/1XruWm68uKlJK16NF0g1W5hfGUb06D7YhWTKCr-cLHSk/edit?usp=sharing)
+
+---
 
 ## System Architecture — High Level
 
