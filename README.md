@@ -243,19 +243,6 @@ Per-station elevation angles + GAST at simulation epoch.
 
 ---
 
-## Evaluation Criteria
-
-| Criteria | Weight | How We Address It |
-|---|---|---|
-| **Safety Score** | 25% | 3-stage KDTree→TCA pipeline; Stage 0 immediate check; geometry-aware RTN evasion |
-| **Fuel Efficiency** | 20% | RTN axis selection (cheapest burn per geometry); dynamic Tsiolkovsky mass tracking |
-| **Constellation Uptime** | 15% | Nominal slot propagated with RK4+J2; slot-targeted recovery; station-keeping monitoring |
-| **Algorithmic Speed** | 15% | KDTree O(N log N); adaptive step sizing; velocity-adaptive TCA coarse step |
-| **UI/UX & Visualization** | 15% | PS1 globe; 60 FPS instanced debris; pulsing ground stations; Gantt timeline |
-| **Code Quality** | 10% | Structured JSON event logging; modular architecture; typed Pydantic models |
-
----
-
 ## Quick Start
 
 ### Docker (required for grader)
