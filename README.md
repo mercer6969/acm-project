@@ -1,5 +1,5 @@
 # ◈ SOLIS
-### National Space Hackathon 2026 — Project AETHER
+### National Space Hackathon 2026 — Project SOLIS-1
 
 > A high-performance backend system and real-time 3D dashboard for autonomous satellite collision avoidance, maneuver planning, and constellation management in Low Earth Orbit.
 
