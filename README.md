@@ -236,7 +236,7 @@ flowchart TD
     subgraph ROOT["Project Root"]
         DF[Dockerfile\nubuntu:22.04\nexposes port 8000]
         REQ[requirements.txt\nfastapi uvicorn numpy scikit-learn]
-        ST[stress_test.py\n50 sats 500 debris 7 tests]
+        ST[app/stress_test.py\n50 sats 500 debris 7 tests]
         RM[README.md]
     end
 
@@ -402,21 +402,8 @@ npm run dev
 ### Stress Test
 ```bash
 pip install requests
-python stress_test.py
+python app/stress_test.py
 ```
-
----
-
-## Evaluation Criteria
-
-| Criteria | Weight | Implementation |
-|---|---|---|
-| Safety Score | 25% | 3-stage conjunction pipeline, autonomous evasion |
-| Fuel Efficiency | 20% | RTN-frame burns, Tsiolkovsky mass tracking |
-| Constellation Uptime | 15% | Station-keeping box, recovery burns |
-| Algorithmic Speed | 15% | KDTree O(N log N), adaptive RK4 step sizing |
-| UI/UX & Visualization | 15% | PS1 Mouthwashing-style 3D globe, real-time panels |
-| Code Quality | 10% | Modular architecture, typed models, logging |
 
 ---
 
@@ -787,7 +774,7 @@ docker build -t acm .
 docker run -p 8000:8000 acm
 
 # Stress test (backend must be running)
-py stress_test.py
+py app/stress_test.py
 ```
 
 ---
