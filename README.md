@@ -1,12 +1,12 @@
-# ◈ SOLIS-1
-### National Space Hackathon 2026 — Project SOLIS
+# ◈ SOLIS
+### National Space Hackathon 2026 — Project AETHER
 
 > A high-performance backend system and real-time 3D dashboard for autonomous satellite collision avoidance, maneuver planning, and constellation management in Low Earth Orbit.
 
 ---
 
 ![Status](https://img.shields.io/badge/status-operational-00ff88?style=for-the-badge&labelColor=040a0f)
-![Python](https://img.shields.io/badge/python-3.11+-blue?style=for-the-badge&logo=python&labelColor=040a0f)
+![Python](https://img.shields.io/badge/python-3.12-blue?style=for-the-badge&logo=python&labelColor=040a0f)
 ![FastAPI](https://img.shields.io/badge/FastAPI-0.111-009688?style=for-the-badge&logo=fastapi&labelColor=040a0f)
 ![React](https://img.shields.io/badge/React-18-61DAFB?style=for-the-badge&logo=react&labelColor=040a0f)
 ![Docker](https://img.shields.io/badge/Docker-ready-2496ED?style=for-the-badge&logo=docker&labelColor=040a0f)
@@ -15,7 +15,7 @@
 
 ## Overview
 
-The SOLIS-1 is a ground-based autonomous system acting as the "brain" for a fleet of 50+ active satellites navigating a hazardous debris field in LEO. It continuously ingests orbital telemetry, predicts conjunctions up to 24 hours ahead, and autonomously plans and executes collision avoidance maneuvers — all without human intervention.
+SOLIS is a ground-based autonomous system acting as the "brain" for a fleet of 50+ active satellites navigating a hazardous debris field in LEO. It continuously ingests orbital telemetry, predicts conjunctions up to 24 hours ahead, and autonomously plans and executes collision avoidance maneuvers — all without human intervention.
 
 ---
 
@@ -31,6 +31,10 @@ flowchart TD
         MAN[POST /api/maneuver/schedule]
         SNAP[GET /api/visualization/snapshot]
         ACTIVE[GET /api/maneuvers/active]
+        LOS[GET /api/los/check]
+        GS[POST /api/ground-stations/los-check]
+        SK[POST /api/station-keeping/check]
+        EVT[GET /api/events]
     end
 
     subgraph PHYSICS["Physics Engine"]
@@ -47,9 +51,10 @@ flowchart TD
     end
 
     subgraph STATE["Global State"]
-        CFG[config.py\nsatellites + debris dicts\nsim clock]
+        CFG[config.py\nsatellites + debris dicts\nsim clock + epoch]
         SATM[models/satellite.py]
         DEBM[models/debris.py]
+        LOG[logger.py\nStructured JSON event log]
     end
 
     subgraph FRONTEND["Frontend — React + Three.js on port 3000"]
@@ -78,6 +83,7 @@ flowchart TD
     CONJ --> CFG
     PLAN --> FUEL
     PLAN --> CFG
+    PLAN --> LOG
 
     CFG --> SATM
     CFG --> DEBM
@@ -115,23 +121,25 @@ flowchart LR
 flowchart TD
     A([POST /api/simulate/step]) --> B[Propagate all Satellites\nRK4 + J2]
     B --> C[Propagate all Debris\nRK4 + J2]
-    C --> D[advance_sim_time]
+    C --> C2[Propagate Nominal Slots\nsame RK4 + J2]
+    C2 --> D[advance_sim_time]
     D --> E[execute_scheduled_burns]
     E --> F[predict_conjunctions\n24hr lookahead]
 
     subgraph PIPELINE["3-Stage Conjunction Pipeline"]
-        F --> G[Stage 1: KDTree\nfilter within 50km]
+        F --> F0[Stage 0: Immediate\ndist < 0.1km right now]
+        F0 --> G[Stage 1: KDTree\nfilter within 50km]
         G --> H[Stage 2: Linear TCA\neliminate safe trajectories]
-        H --> I[Stage 3: Propagated TCA\nRK4 two-pass 24hr scan]
+        H --> I[Stage 3: Propagated TCA\nvelocity-adaptive RK4 24hr scan]
     end
 
     I --> J{severity?}
-    J -->|CRITICAL under 0.1km| K[plan_maneuver]
-    J -->|YELLOW under 5km| L[Log warning]
-    K --> M[Apply evasion burn\nsat.v += dv]
+    J -->|CRITICAL under 0.1km| K[plan_maneuver\nRTN geometry-aware]
+    J -->|YELLOW / RED| L[Log CDM warning]
+    K --> M[Apply evasion burn\nsat.v += dv ECI]
     M --> N[Tsiolkovsky fuel depletion]
-    N --> O[Schedule recovery burn\nT + 660s]
-    O --> P([STEP_COMPLETE response])
+    N --> O[Schedule TCA-aware recovery]
+    O --> P([STEP_COMPLETE\n+ fleet_metrics])
 ```
 
 ---
@@ -142,29 +150,34 @@ flowchart TD
 flowchart LR
     A[50 Satellites\n10000+ Debris] --> B
 
-    subgraph S1["Stage 1 — KDTree"]
-        B[Build KDTree over debris]
-        B --> C[Query 50km radius per sat]
-        C --> D[99%+ debris eliminated]
+    subgraph S0["Stage 0 — Immediate Check"]
+        B[dist under 100m right now?]
+        B -->|Yes| CRIT[CRITICAL — skip propagation]
     end
 
-    D --> E
+    B -->|No| S1
+
+    subgraph S1["Stage 1 — KDTree O(N log N)"]
+        S1A[Build KDTree over debris]
+        S1A --> S1B[Query 50km radius per sat]
+        S1B --> S1C[99%+ debris eliminated]
+    end
+
+    S1C --> S2
 
     subgraph S2["Stage 2 — Linear TCA"]
-        E[Compute linear closest approach\nconstant velocity assumption]
-        E --> F{Future threat?}
-        F -->|No| G[Skip]
-        F -->|Yes| H[Pass to Stage 3]
+        S2A[Constant-velocity TCA]
+        S2A --> S2B{miss > 2km?}
+        S2B -->|Yes| SKIP[Skip — safe]
+        S2B -->|No| S3
     end
 
-    H --> I
-
     subgraph S3["Stage 3 — Propagated TCA"]
-        I[Coarse RK4 scan\n60s steps over 24hr]
-        I --> J[Fine RK4 scan\n5s steps around minimum]
-        J --> K{dist under 0.1km?}
-        K -->|Yes| L[CRITICAL warning]
-        K -->|No| M[Safe — discard]
+        S3A[Velocity-adaptive coarse scan\nover 24hr horizon]
+        S3A --> S3B[Fine 5s scan ±5min around minimum]
+        S3B --> S3C{dist under 0.1km?}
+        S3C -->|Yes| L[CRITICAL warning]
+        S3C -->|No| M[Safe — discard]
     end
 ```
 
@@ -176,20 +189,20 @@ flowchart LR
 flowchart TD
     A([plan_maneuver called]) --> B{Satellite exists?}
     B -->|No| Z1([Return None])
-    B -->|Yes| C{Cooldown active?}
+    B -->|Yes| C{Cooldown active?\ncooldown_remaining_at}
     C -->|Yes| Z2([COOLDOWN status])
     C -->|No| D{Fuel under 5%?}
     D -->|Yes| E[Graveyard burn\nprograde to raise apogee]
-    D -->|No| F[Compute evasion dv\nRTN frame geometry]
-    F --> G[dv = away from debris\n10 m/s magnitude]
-    G --> H[Tsiolkovsky fuel cost]
+    D -->|No| F[Compute evasion dv\nRTN frame geometry\nhead-on→radial\nabove/below→transverse]
+    F --> G[Burn direction =\naway from debris at TCA]
+    G --> H[Tsiolkovsky fuel cost\ndynamic wet mass]
     H --> I{Enough fuel?}
     I -->|No| Z3([INSUFFICIENT_FUEL])
-    I -->|Yes| J[Apply evasion burn\nsat.v += dv]
+    I -->|Yes| J[Apply evasion burn\nsat.v += dv ECI]
     J --> K[Deplete fuel mass]
     K --> L[Start 600s cooldown]
-    L --> M[Schedule recovery burn\nT + 660s]
-    M --> N([Return maneuver dict])
+    L --> M[Schedule TCA-aware recovery\nfires when threat clears]
+    M --> N([Return maneuver dict\n+ log events])
 ```
 
 ---
@@ -199,15 +212,30 @@ flowchart TD
 ```mermaid
 flowchart LR
     A[delta_v km/s] --> B[Convert to m/s]
-    B --> C[dm = m_wet x 1 - e to the power of -dv divided by Isp x g0]
-    C --> D[sat.fuel -= dm]
+    B --> C[dm = m_current × 1 − exp(−dv / Isp×g0)]
+    C --> D[sat.fuel -= dm\nsat.mass decreases]
     D --> E{fuel fraction\nunder 5%?}
-    E -->|Yes| F[Flag EOL\nschedule graveyard]
+    E -->|Yes| F[EOL_TRIGGERED\nschedule graveyard burn]
     E -->|No| G[Continue ops]
 
     subgraph K["Constants"]
-        H[Isp = 300s\ng0 = 9.80665\nMax dv = 15 m/s\nCooldown = 600s]
+        H[Isp = 300s · g0 = 9.80665 m/s²\nMax dv = 15 m/s · Cooldown = 600s]
     end
+```
+
+---
+
+## Ground Station LOS
+
+```mermaid
+flowchart LR
+    A([Maneuver request]) --> B[get_unix_time\nSIM_EPOCH + sim_elapsed]
+    B --> C[Compute GAST\nGreenwich Sidereal Time]
+    C --> D[Rotate each station\nECEF → ECI via GAST]
+    D --> E[Elevation angle\narcsin dot range up / range]
+    E --> F{Any station\nabove min mask?}
+    F -->|Yes| G([LOS = true\nmaneuver accepted])
+    F -->|No| H([LOS = false\nREJECTED])
 ```
 
 ---
@@ -218,7 +246,7 @@ flowchart LR
 flowchart TD
     APP[App.jsx\npolls snapshot + maneuvers every 2s\nmanages all state]
 
-    APP -->|satellites debrisCloud selectedSat| GLOBE[Globe3D.jsx\nThree.js PS1 Earth\nReal texture + flat shading\nInstanced debris cloud\nSatellite 3D models + trails\nCRT scanline overlay]
+    APP -->|satellites debrisCloud selectedSat| GLOBE[Globe3D.jsx\nThree.js PS1 Earth\nReal texture + flat shading\nInstanced debris cloud\nSatellite 3D models + trails\n6 ground station beacons\nEarth group — all rotates together]
 
     APP -->|warnings selectedSat| BULL[BullseyePlot.jsx\nCanvas 2D polar chart\nDebris by distance + angle\nColour coded by severity]
 
@@ -234,57 +262,61 @@ flowchart TD
 ```mermaid
 flowchart TD
     subgraph ROOT["Project Root"]
-        DF[Dockerfile\nubuntu:22.04\nexposes port 8000]
-        REQ[requirements.txt\nfastapi uvicorn numpy scikit-learn]
-        ST[stress_test.py\n50 sats 500 debris 7 tests]
+        DF[Dockerfile\nMulti-stage: Node build + ubuntu:22.04]
+        REQ[requirements.txt]
+        GS[ground_stations.csv\n6 stations from spec]
         RM[README.md]
     end
 
     subgraph APP["app/"]
-        MAIN[main.py\nFastAPI app + routers\nvisualization snapshot endpoint]
-        CFG[config.py\nglobal satellites + debris dicts\nsim clock functions]
+        MAIN[main.py\nFastAPI app + all routers\nsnapshot + GST-corrected ECI→lat/lon]
+        CFG[config.py\nsatellites + debris dicts\nsim clock + SIM_EPOCH_UNIX]
+        LOG[logger.py\nStructured JSON events\nring buffer 500 events]
 
         subgraph API["api/"]
-            TAPI[telemetry.py\nPOST /api/telemetry\nroutes SATELLITE vs DEBRIS]
-            SAPI[simulate.py\nPOST /api/simulate/step\nfull pipeline per tick]
+            TAPI[telemetry.py\nPOST /api/telemetry]
+            SAPI[simulate.py\nPOST /api/simulate/step\nfleet_metrics in response]
             MAPI[maneuver.py\nPOST /api/maneuver/schedule\nGET /api/maneuvers/active]
+            LOSAPI[los.py\nGET /api/los/check\nreal GAST + WGS-84 elevation]
+            GSAPI[ground_stations.py\nPOST /api/ground-stations/los-check\npass + blackout windows]
+            SKAPI[station_keeping.py\nPOST /api/station-keeping/check\nCW recovery burn trigger]
         end
 
         subgraph ORBIT["orbit/"]
-            OPROP[propagator.py\nRK4 4th order\nJ2 perturbation\nadaptive step sizing]
+            OPROP[propagator.py\nRK4 4th order + J2\nadaptive step sizing]
         end
 
         subgraph COL["collision/"]
-            CCONJ[conjunction.py\nKDTree query\nYELLOW RED CRITICAL tiers]
-            CTREE[spatial_index.py\nsklearn KDTree\nbuild + query helpers]
+            CCONJ[conjunction.py\nKDTree query\nCRITICAL RED YELLOW tiers]
+            CTREE[spatial_index.py\nsklearn KDTree]
         end
 
         subgraph PRED["prediction/"]
-            PPRED[predictor.py\n3-stage pipeline\n24hr horizon]
-            PTCA[tca.py\nlinear_tca fast\npropagated_tca accurate]
+            PPRED[predictor.py\nStage 0-3 pipeline\n24hr horizon]
+            PTCA[tca.py\nlinear_tca + propagated_tca\nvelocity-adaptive coarse step]
         end
 
         subgraph MAN["maneuver/"]
-            MPLAN[planner.py\nplan_maneuver\nexecute_scheduled_burns\ngraveyard EOL]
-            MFUEL[fuel_model.py\nTsiolkovsky\nmax_delta_v helper]
+            MPLAN[planner.py\nRTN geometry evasion\nTCA-aware recovery\ngraveyard EOL]
+            MFUEL[fuel_model.py\nTsiolkovsky\ndynamic wet mass]
         end
 
         subgraph MOD["models/"]
-            MSAT[satellite.py\ndynamic mass property\ncooldown tracking\nnominal slot]
-            MDEB[debris.py\nr v state vectors]
+            MSAT[satellite.py\ndynamic mass + cooldown\nnominal slot + EOL flag]
+            MDEB[debris.py\nECI state vector]
         end
     end
 
     subgraph FE["frontend/"]
         PKG[package.json\nReact 18 + Three.js + Recharts]
-        VCFG[vite.config.js\nproxy /api to port 8000]
+        VCFG[vite.config.js\nproxy /api → port 8000]
 
         subgraph SRC["src/"]
             AAPP[App.jsx\nlayout + polling + step button]
-            ICSS[index.css\nVT323 font CRT design tokens]
+            ICSS[index.css\nVT323 font · CRT design tokens]
 
             subgraph COMP["components/"]
-                CG[Globe3D.jsx\nMouthwashing PS1 Earth\nflat shading NearestFilter]
+                CG[Globe3D.jsx\nMouthwashing PS1 Earth\nground stations + satellites\nrotate with Earth group]
                 CB[BullseyePlot.jsx\nCanvas 2D polar chart]
                 CF[FuelGauges.jsx\nfuel bars + Recharts]
                 CM[ManeuverTimeline.jsx\nGantt burn scheduler]
@@ -325,9 +357,10 @@ Isp = 300s    g₀ = 9.80665 m/s²
 | Initial fuel | 50.0 kg |
 | Max Δv per burn | 15.0 m/s |
 | Thruster cooldown | 600 s |
-| EOL fuel threshold | 5% |
+| EOL fuel threshold | 5% (2.5 kg) |
 | Collision radius | 100 m (0.1 km) |
 | Station-keeping box | 10 km radius |
+| Signal latency | 10 s |
 
 ---
 
@@ -353,6 +386,22 @@ Isp = 300s    g₀ = 9.80665 m/s²
 { "step_seconds": 60 }
 ```
 
+Response includes `fleet_metrics`:
+```json
+{
+  "status": "STEP_COMPLETE",
+  "collisions_detected": 3,
+  "maneuvers_executed": 3,
+  "fleet_metrics": {
+    "uptime_pct": 94.0,
+    "total_fuel_used_kg": 1.834,
+    "optimization_ratio": 51.2,
+    "sats_in_slot": 47,
+    "sats_total": 50
+  }
+}
+```
+
 ### `POST /api/maneuver/schedule`
 ```json
 {
@@ -367,11 +416,32 @@ Isp = 300s    g₀ = 9.80665 m/s²
 }
 ```
 
+Validated against: satellite existence · Δv ≤ 15 m/s · 600 s cooldown · sufficient fuel · ground station LOS
+
 ### `GET /api/visualization/snapshot`
-Compressed fleet snapshot for 3D frontend rendering.
+Compressed fleet state. Debris returned as flattened tuples `[ID, lat, lon, alt]` for minimal payload size.
 
 ### `GET /api/maneuvers/active`
-All pending scheduled burns across the constellation.
+All pending burns across the constellation with type, execute_at, and status.
+
+### `GET /api/los/check?x=6778&y=0&z=0`
+Per-station elevation angles computed using GAST at simulation epoch.
+
+### `GET /api/events`
+Last 500 structured events: `CDM_DETECTED`, `MANEUVER_PLANNED`, `MANEUVER_EXECUTED`, `RECOVERY_SCHEDULED`, `RECOVERY_EXECUTED`, `EOL_TRIGGERED`, `GRAVEYARD_EXECUTED`.
+
+---
+
+## Evaluation Criteria
+
+| Criteria | Weight | How We Address It |
+|---|---|---|
+| **Safety Score** | 25% | 4-stage pipeline (Stage 0 + KDTree + Linear TCA + Propagated TCA); geometry-aware RTN evasion; real LOS validation |
+| **Fuel Efficiency** | 20% | RTN axis selection picks cheapest burn per geometry; dynamic Tsiolkovsky wet mass; slot-targeted recovery |
+| **Constellation Uptime** | 15% | Nominal slot propagated with same RK4+J2; TCA-aware recovery only fires when threat clears; 10 km box monitoring |
+| **Algorithmic Speed** | 15% | KDTree O(N log N); adaptive step sizing; velocity-adaptive TCA coarse step; 500 ms snapshot TTL cache |
+| **UI/UX & Visualization** | 15% | PS1 Mouthwashing globe; pulsing ground station beacons; satellites rotate with Earth; Gantt timeline; Bullseye plot |
+| **Code Quality** | 10% | Structured JSON event logging (7 event types); typed Pydantic models; modular architecture; full stress test suite |
 
 ---
 
@@ -381,162 +451,82 @@ All pending scheduled burns across the constellation.
 ```bash
 docker build -t acm .
 docker run -p 8000:8000 acm
+# Full stack at http://localhost:8000
 ```
 
 ### Local Development
 
-**Backend:**
+**Backend** (run from project root, not inside `app/`):
 ```bash
 pip install -r requirements.txt
-uvicorn app.main:app --reload --port 8000
+python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
 **Frontend:**
 ```bash
 cd frontend
 npm install
-npm run dev
+npm run dev -- --host 0.0.0.0
 # Open http://localhost:3000
 ```
 
 ### Stress Test
 ```bash
-pip install requests
-python stress_test.py
+python app/stress_test.py
 ```
 
 ---
 
-
-## Team Solis
-
-Built for the **National Space Hackathon 2026**.
 ## Project Structure
 
 ```
-ACM PROJECT
+acm-project/
 ├── app/
-│   ├── __pycache__/
+│   ├── main.py                  # FastAPI entry point, all routers, snapshot
+│   ├── config.py                # Global state, sim clock, SIM_EPOCH_UNIX
+│   ├── logger.py                # Structured JSON event log (ring buffer)
+│   ├── stress_test.py           # Automated test suite
 │   ├── api/
-│   │   ├── __pycache__/
-│   │   ├── maneuver.py
-│   │   ├── simulate.py
-│   │   └── telemetry.py
-│   ├── collision/
-│   │   ├── __pycache__/
-│   │   ├── conjunction.py
-│   │   └── spatial_index.py
-│   ├── maneuver/
-│   │   ├── __pycache__/
-│   │   ├── fuel_model.py
-│   │   └── planner.py
-│   ├── models/
-│   │   ├── __pycache__/
-│   │   ├── debris.py
-│   │   └── satellite.py
+│   │   ├── telemetry.py         # POST /api/telemetry
+│   │   ├── simulate.py          # POST /api/simulate/step
+│   │   ├── maneuver.py          # POST /api/maneuver/schedule + active
+│   │   ├── los.py               # GET /api/los/check (real LOS geometry)
+│   │   ├── ground_stations.py   # Pass windows + blackout calculator
+│   │   └── station_keeping.py   # 10 km box monitor + CW recovery burns
 │   ├── orbit/
-│   │   ├── __pycache__/
-│   │   └── propagator.py
-│   ├── physics/
-│   │   └── __pycache__/
-│   │       └── propagator.cpython-314.pyc
+│   │   └── propagator.py        # RK4 + J2, adaptive step sizing
+│   ├── collision/
+│   │   ├── conjunction.py       # KDTree query, severity tiers
+│   │   └── spatial_index.py     # sklearn KDTree wrapper
 │   ├── prediction/
-│   │   ├── __pycache__/
-│   │   ├── predictor.py
-│   │   └── tca.py
-│   ├── config.py
-│   ├── main.py
-│   └── stress_test.py
-│
+│   │   ├── predictor.py         # Stage 0–3 pipeline
+│   │   └── tca.py               # linear_tca + propagated_tca
+│   ├── maneuver/
+│   │   ├── planner.py           # RTN evasion, TCA-aware recovery, EOL
+│   │   └── fuel_model.py        # Tsiolkovsky + max_delta_v
+│   └── models/
+│       ├── satellite.py         # Dynamic mass, cooldown, nominal slot
+│       └── debris.py            # ECI state vector
 ├── frontend/
-│   ├── node_modules/
-│   └── src/
-│       ├── components/
-│       │   ├── BullseyePlot.jsx
-│       │   ├── FuelGauges.jsx
-│       │   ├── Globe3D.jsx
-│       │   └── ManeuverTimeline.jsx
-│       ├── App.jsx
-│       ├── index.css
-│       └── main.jsx
+│   ├── src/
+│   │   ├── App.jsx              # Layout, polling, step button
+│   │   ├── index.css            # VT323 font, CRT design system
+│   │   └── components/
+│   │       ├── Globe3D.jsx      # Three.js PS1 globe + ground stations
+│   │       ├── BullseyePlot.jsx # Polar conjunction chart
+│   │       ├── FuelGauges.jsx   # Fleet fuel monitoring
+│   │       └── ManeuverTimeline.jsx  # Gantt burn scheduler
 │   ├── index.html
-│   ├── package-lock.json
 │   ├── package.json
 │   └── vite.config.js
-│
-├── dockerfile
-├── README.md
-└── requirements.txt
+├── Dockerfile                   # Multi-stage: Node build → ubuntu:22.04
+├── requirements.txt
+├── ground_stations.csv
+└── README.md
 ```
-## 📁 Project Structure (Explained)
-
-```
-ACM PROJECT
-```
-
-### 🔧 Backend (`app/`)
-Core logic for simulation, prediction, and maneuver planning.
-
-- **api/** → Handles API endpoints (routes)
-  - `simulate.py` → Runs simulation steps
-  - `maneuver.py` → Handles maneuver-related requests
-  - `telemetry.py` → Satellite data / telemetry APIs  
-
-- **collision/** → Collision detection system  
-  - `conjunction.py` → Detects close approaches between objects  
-  - `spatial_index.py` → Optimized spatial searching  
-
-- **maneuver/** → Maneuver planning logic  
-  - `planner.py` → Decides how to avoid collisions  
-  - `fuel_model.py` → Calculates fuel usage  
-
-- **models/** → Data structures  
-  - `satellite.py` → Satellite model  
-  - `debris.py` → Space debris model  
-
-- **orbit/** → Orbital mechanics  
-  - `propagator.py` → Updates satellite position over time  
-
-- **prediction/** → Future risk analysis  
-  - `predictor.py` → Predicts possible collisions  
-  - `tca.py` → Time of Closest Approach calculations  
-
-- `config.py` → Configuration (constants, parameters)  
-- `main.py` → Entry point (starts backend server)  
-- `stress_test.py` → Performance testing  
 
 ---
 
-### 🌐 Frontend (`frontend/`)
-User interface built with React + Vite.
+## Team Solis
 
-- **src/components/** → UI components  
-  - `Globe3D.jsx` → 3D Earth visualization  
-  - `BullseyePlot.jsx` → Collision visualization  
-  - `FuelGauges.jsx` → Fuel usage display  
-  - `ManeuverTimeline.jsx` → Timeline of maneuvers  
-
-- `App.jsx` → Main app component  
-- `main.jsx` → React entry point  
-- `index.css` → Styling  
-
-- `index.html` → Root HTML file  
-- `package.json` → Project dependencies  
-- `vite.config.js` → Vite configuration  
-
----
-
-### ⚙️ Other Files
-
-- `dockerfile` → Container setup  
-- `requirements.txt` → Python dependencies  
-- `README.md` → Project documentation  
-
----
-
-### 💡 Summary
-This project simulates **satellite collision detection and avoidance**, combining:
-- Orbital physics  
-- Collision prediction  
-- Maneuver planning  
-- Interactive 3D visualization  
+Built for the **National Space Hackathon 2026 — Project AETHER**.
